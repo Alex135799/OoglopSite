@@ -4,21 +4,6 @@
 
 .App-header {
   background-color: #282c34;
+  opacity: .66;
   height: 7vh;
-}
-
-.App-body {
-  background-color: #0a1429;
-  height: 93vh;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(3vh);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
 }
