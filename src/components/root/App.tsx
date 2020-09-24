@@ -1,7 +1,8 @@
 import React, { Component } from 'react';
 import { BrowserRouter as Router, Route, Switch } from 'react-router-dom'
 import './App.css';
-import Home from '../home/Home'
+import { Home } from '../home/Home'
+import { Header } from '../header/Header'
 
 import { Provider } from 'react-redux';
 import configureStore from '../../store/configureStore';
@@ -22,7 +23,7 @@ class App extends Component {
       <Provider store={store}>
         <Router>
           <div className="App">
-            <header className="App-header" />
+            <Header currentPage="home"/>
             <div id="body" className="App-body">
               <Switch>
                 <Route exact={true} path="/" component={Home} />

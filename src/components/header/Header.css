@@ -1,0 +1,13 @@
+.header {
+  opacity: .66;
+}
+
+.header-text {
+  opacity: 1;
+  color: aliceblue;
+}
+
+.text-center {
+  text-align: center;
+  align-content: center;
+}

@@ -16,8 +16,26 @@
   color: black;
 }
 
-.showcase-banner {
-  opacity: 1;
+.showcase-banner-div {
+  display: grid;
+  width: 100%;
+}
+
+.banner-under-construction-div {
+  grid-row: 1;
+  grid-column: 1;
+  opacity: .33;
+}
+
+.under-construction-div {
+  grid-row: 1;
+  grid-column: 1;
+  z-index: 10;
+  align-self: center;
+}
+
+.under-construction-img {
+  width: 100%;
 }
 
 .no-padding {
