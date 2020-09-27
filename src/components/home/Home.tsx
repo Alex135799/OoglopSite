@@ -1,4 +1,4 @@
-import React, { Component } from 'react';
+import React from 'react';
 import background from '../../assets/background.jpg';
 import write from '../../assets/write3.jpg';
 import wine from '../../assets/wine2.jpg';
