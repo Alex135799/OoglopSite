@@ -35,7 +35,7 @@ const getBuildAction = function(scope : cdk.Stack, roleIn : iam.IRole, rootS3Buc
           "CI": { value: "true" }
         },
         environment: {
-          buildImage: build.LinuxBuildImage.fromCodeBuildImageId("aws/codebuild/nodejs:10.1.0"),
+          buildImage: build.LinuxBuildImage.fromCodeBuildImageId("aws/codebuild/standard:8.0"),
           computeType: build.ComputeType.SMALL
         }
       }

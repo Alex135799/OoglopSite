@@ -3,9 +3,14 @@ export default function(rootS3BucketName : string) {
     version: '0.2',
     phases: {
       install: {
+        "runtime-versions": {
+          "nodejs": 22
+        },
         commands: [
           "echo Installing...",
-          "npm install"
+          "node --version",
+          "npm --version",
+          "npm ci"
         ]
       },
       pre_build: {
@@ -24,7 +29,7 @@ export default function(rootS3BucketName : string) {
       post_build: {
         commands: [
           "echo Build completed on `date`",
-          `aws s3 sync --delete ./build s3://${rootS3BucketName}`
+          `aws s3 sync --delete ./dist s3://${rootS3BucketName}`
         ]
       }
     }
