@@ -14,7 +14,7 @@ const sourceAction = new act.GitHubSourceAction({
   repo: "OoglopSite",
   oauthToken: cdk.SecretValue.secretsManager('ooglopcid-github-token'),
   output: sourceOutput,
-  branch: "master",
+  branch: "main",
 });
 
 const getBuildAction = function(scope : cdk.Stack, roleIn : iam.IRole, rootS3BucketName : string) {
