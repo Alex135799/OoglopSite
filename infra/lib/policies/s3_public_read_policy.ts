@@ -1,4 +1,4 @@
-import * as iam from '@aws-cdk/aws-iam';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 export default function(s3Arn : string) {
   return new iam.PolicyStatement(

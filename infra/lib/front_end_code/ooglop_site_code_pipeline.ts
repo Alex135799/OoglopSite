@@ -1,7 +1,8 @@
-import * as cdk from '@aws-cdk/core';
-import * as iam from '@aws-cdk/aws-iam';
-import * as s3 from '@aws-cdk/aws-s3';
-import * as pipe from '@aws-cdk/aws-codepipeline';
+import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as pipe from 'aws-cdk-lib/aws-codepipeline';
+import { Construct } from 'constructs';
 import OoglopSiteCodepipelinePolicy from '../policies/pipeline_policy';
 import OoglopSiteCodebuildPolicy from '../policies/build_policy';
 import OoglopSiteS3SSESSLPolicies from '../policies/s3_sse_ssl_policies';
@@ -9,7 +10,7 @@ import OoglopSiteS3PublicReadPolicy from '../policies/s3_public_read_policy';
 import actions from '../pipeline_actions/ooglop_site_pipeline_actions';
 
 export class OoglopSiteCodePipeline extends cdk.Stack {
-  constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     //Define S3 buckets where the website lives
@@ -43,7 +44,7 @@ export class OoglopSiteCodePipeline extends cdk.Stack {
     }
 
     //Define pipeline role and policies for pipeline:
-    const OoglopSiteCodepipelineRoleDef = new iam.Role(this, "OoglopSiteCodepipelineRole", 
+    const OoglopSiteCodepipelineRoleDef = new iam.Role(this, "OoglopSiteCodepipelineRole",
       {
         description: "This role is used by the pipeline to push the front end code for OoglopSite.",
         roleName: "OoglopSiteCodepipelineRole",
@@ -52,9 +53,9 @@ export class OoglopSiteCodePipeline extends cdk.Stack {
     );
     const OoglopSiteCodepipelinePolicyDef = new iam.Policy(this, "OoglopSiteCodepipelinePolicy", OoglopSiteCodepipelinePolicy);
     OoglopSiteCodepipelinePolicyDef.attachToRole(OoglopSiteCodepipelineRoleDef);
-    
+
     //Define build role and policies for AWS CodeBuild
-    const OoglopSiteCodebuildRoleDef = new iam.Role(this, "OoglopSiteCodebuildRole", 
+    const OoglopSiteCodebuildRoleDef = new iam.Role(this, "OoglopSiteCodebuildRole",
       {
         description: "This role is used by the pipeline to push the front end code for OoglopSite.",
         roleName: "OoglopSiteCodebuildRole",
@@ -67,8 +68,8 @@ export class OoglopSiteCodePipeline extends cdk.Stack {
     const OoglopSiteCodebuildPolicyDef = new iam.Policy(this, "OoglopSiteCodebuildPolicy", OoglopSiteCodebuildPolicy(OoglopSiteRootSiteS3BucketDef.bucketArn));
     OoglopSiteCodebuildPolicyDef.attachToRole(OoglopSiteCodebuildRoleDef);
 
-    //Define the actual pipeline: 
-    new pipe.Pipeline(this, "OoglopSitePipeline", 
+    //Define the actual pipeline:
+    new pipe.Pipeline(this, "OoglopSitePipeline",
       {
         pipelineName: "OoglopSitePipeline",
         restartExecutionOnUpdate: false,
