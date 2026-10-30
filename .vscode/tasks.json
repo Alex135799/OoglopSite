@@ -1,0 +1,94 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "vite: dev",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "(?!)",
+          "message": 0
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE v",
+          "endsPattern": "Local:.*http://localhost:\\d+"
+        }
+      },
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "npm: test",
+      "type": "npm",
+      "script": "test",
+      "group": "test",
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
+    },
+    {
+      "label": "npm: test:watch",
+      "type": "npm",
+      "script": "test:watch",
+      "isBackground": true,
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "npm: test:coverage",
+      "type": "npm",
+      "script": "test:coverage",
+      "group": "test",
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
+    },
+    {
+      "label": "npm: typecheck",
+      "type": "npm",
+      "script": "typecheck",
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
+    },
+    {
+      "label": "npm: build",
+      "type": "npm",
+      "script": "build",
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
+    }
+  ]
+}

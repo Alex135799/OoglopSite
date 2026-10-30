@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Vite: Launch Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "vite: dev"
+    },
+    {
+      "name": "Vitest: Current File",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.local/bin/node",
+      "program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+      "args": ["run", "${relativeFile}"],
+      "env": {
+        "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Vitest: All",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.local/bin/node",
+      "program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+      "args": ["run"],
+      "env": {
+        "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}
