@@ -1,5 +1,5 @@
-import React, { Component } from 'react';
-import { BrowserRouter as Router, Route, Switch } from 'react-router-dom'
+import React from 'react';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom'
 import './App.css';
 import { Home } from '../home/Home'
 import { Header } from '../header/Header'
@@ -9,34 +9,23 @@ import configureStore from '../../store/configureStore';
 
 const store = configureStore();
 
-class App extends Component {
-  constructor(props : any) {
-    super(props);
-
-    this.state = {
-      currentPage: "home"
-    }
-  }
-
-  render() {
-    return (
-      <Provider store={store}>
-        <Router>
-          <div className="App">
-            <Header currentPage="home"/>
-            <div id="body" className="App-body">
-              <Switch>
-                <Route exact={true} path="/" component={Home} />
-
-                <Route component={Home} />
-              </Switch>
-            </div>
-            <footer className="App-footer" />
+const App = () => {
+  return (
+    <Provider store={store}>
+      <Router>
+        <div className="App">
+          <Header currentPage="home"/>
+          <div id="body" className="App-body">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="*" element={<Home />} />
+            </Routes>
           </div>
-        </Router>
-      </Provider>
-    );
-  }
+          <footer className="App-footer" />
+        </div>
+      </Router>
+    </Provider>
+  );
 }
 
 export default App;

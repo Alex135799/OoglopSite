@@ -1,9 +1,8 @@
-import React from 'react';
 import { Navbar } from 'react-bootstrap';
 import './Header.css';
 
 type HeaderProps = {
-  currentPage: String
+  currentPage: string
 }
 
 export const Header = ({ currentPage }: HeaderProps) => {

@@ -13,7 +13,7 @@ const wineUnderConstruction = true;
 const moneyUnderConstruction = true;
 const mysteryUnderConstruction = true;
 
-const addUnderConstruction = (imgUnderConstruction: JSX.Element) => {
+const addUnderConstruction = (imgUnderConstruction: React.ReactElement) => {
   return (
     <div className="showcase-banner-div">
       <Col xs={{span:8, offset:2}} className="under-construction-div">
