@@ -18,6 +18,11 @@
           "endsPattern": "Local:.*http://localhost:\\d+"
         }
       },
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      },
       "presentation": {
         "reveal": "always",
         "panel": "dedicated"
@@ -28,7 +33,12 @@
       "type": "npm",
       "script": "test",
       "group": "test",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
     },
     {
       "label": "npm: test:watch",
@@ -36,6 +46,11 @@
       "script": "test:watch",
       "isBackground": true,
       "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      },
       "presentation": {
         "reveal": "always",
         "panel": "dedicated"
@@ -46,19 +61,34 @@
       "type": "npm",
       "script": "test:coverage",
       "group": "test",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
     },
     {
       "label": "npm: typecheck",
       "type": "npm",
       "script": "typecheck",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
     },
     {
       "label": "npm: build",
       "type": "npm",
       "script": "build",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "options": {
+        "env": {
+          "PATH": "${env:HOME}/.local/bin:${env:PATH}"
+        }
+      }
     }
   ]
 }
