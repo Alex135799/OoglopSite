@@ -1,13 +1,24 @@
-import { expect as expectCDK, matchTemplate, MatchStyle } from '@aws-cdk/assert';
-import * as cdk from '@aws-cdk/core';
-import * as OoglopSiteConfig from '../lib/infrastructure/ooglop_site_infrastructure';
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import { OoglopSiteInfrastructure } from '../lib/infrastructure/ooglop_site_infrastructure';
+import { OoglopSiteCodePipeline } from '../lib/front_end_code/ooglop_site_code_pipeline';
 
-test('Empty Stack', () => {
-    const app = new cdk.App();
-    // WHEN
-    const stack = new OoglopSiteConfig.OoglopSiteInfrastructure(app, 'MyTestStack');
-    // THEN
-    expectCDK(stack).to(matchTemplate({
-      "Resources": {}
-    }, MatchStyle.EXACT))
+test('Infrastructure stack is empty for now', () => {
+  const app = new cdk.App();
+  const stack = new OoglopSiteInfrastructure(app, 'MyTestStack');
+  const template = Template.fromStack(stack);
+
+  expect(template.toJSON().Resources ?? {}).toEqual({});
+});
+
+test('Pipeline stack defines the site buckets and pipeline', () => {
+  const app = new cdk.App();
+  const stack = new OoglopSiteCodePipeline(app, 'TestPipeline');
+  const template = Template.fromStack(stack);
+
+  template.resourceCountIs('AWS::S3::Bucket', 2);
+  template.resourceCountIs('AWS::CodePipeline::Pipeline', 1);
+  template.hasResourceProperties('AWS::CodePipeline::Pipeline', {
+    Name: 'OoglopSitePipeline',
+  });
 });

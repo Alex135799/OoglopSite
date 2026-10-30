@@ -1,8 +1,8 @@
-import * as cdk from '@aws-cdk/core';
-import * as iam from '@aws-cdk/aws-iam';
-import * as pipe from '@aws-cdk/aws-codepipeline';
-import * as act from '@aws-cdk/aws-codepipeline-actions';
-import * as build from '@aws-cdk/aws-codebuild';
+import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as pipe from 'aws-cdk-lib/aws-codepipeline';
+import * as act from 'aws-cdk-lib/aws-codepipeline-actions';
+import * as build from 'aws-cdk-lib/aws-codebuild';
 import getOoglopSiteBuildSpec from './build_spec/ooglop_site_build_spec';
 
 const sourceOutput = new pipe.Artifact();
@@ -23,7 +23,7 @@ const getBuildAction = function(scope : cdk.Stack, roleIn : iam.IRole, rootS3Buc
     input: sourceOutput,
     outputs: [ buildOutput ],
     role: roleIn,
-    project: new build.PipelineProject(scope, "OoglopSiteBuildSiteProject", 
+    project: new build.PipelineProject(scope, "OoglopSiteBuildSiteProject",
       {
         projectName: "OoglopSiteBuildSiteProject",
         description: "This is the build project to include in OoglopSite pipeline.",
