@@ -8,16 +8,15 @@ import underConstruction from '../../assets/underconstruction.jpg';
 import { Container, Row, Col, Image } from 'react-bootstrap';
 import './Home.css';
 
-const writeUnderConstruction = true;
-const wineUnderConstruction = true;
-const moneyUnderConstruction = true;
-const mysteryUnderConstruction = true;
+type HomeProps = {
+  underConstruction?: boolean
+}
 
 const addUnderConstruction = (imgUnderConstruction: React.ReactElement) => {
   return (
     <div className="showcase-banner-div">
       <Col xs={{span:8, offset:2}} className="under-construction-div">
-        <Image src={underConstruction} className="under-construction-img"/>
+        <Image src={underConstruction} alt="Under construction" className="under-construction-img"/>
       </Col>
       <Col xs={12} className="banner-under-construction-div no-padding">
         {imgUnderConstruction}
@@ -26,32 +25,31 @@ const addUnderConstruction = (imgUnderConstruction: React.ReactElement) => {
   );
 }
 
-export const Home = () => {
-  const writeImg = <Image src={write} fluid/>
-  const renderWriteImg = writeUnderConstruction ? addUnderConstruction(writeImg) : writeImg
-  const wineImg = <Image src={wine} fluid/>
-  const renderWineImg = wineUnderConstruction ? addUnderConstruction(wineImg) : wineImg
-  const moneyImg = <Image src={money} fluid/>
-  const renderMoneyImg = moneyUnderConstruction ? addUnderConstruction(moneyImg) : moneyImg
-  const mysteryImg = <Image src={mystery} fluid/>
-  const renderMysteryImg = mysteryUnderConstruction ? addUnderConstruction(mysteryImg) : mysteryImg
+export const Home = ({ underConstruction: showBanner = true }: HomeProps) => {
+  const withBanner = (img: React.ReactElement) =>
+    showBanner ? addUnderConstruction(img) : img
+
+  const writeImg = withBanner(<Image src={write} alt="Writing showcase" fluid/>)
+  const wineImg = withBanner(<Image src={wine} alt="Wine showcase" fluid/>)
+  const moneyImg = withBanner(<Image src={money} alt="Money showcase" fluid/>)
+  const mysteryImg = withBanner(<Image src={mystery} alt="Mystery showcase" fluid/>)
 
   return (
     <div id="home" className="home-body">
-      <Image src={background} className="home-bg"/>
+      <Image src={background} alt="Ooglop site background" className="home-bg"/>
       <Container className="showcase" fluid>
         <Row>
           <Col md={6} className="no-padding">
-            {renderWriteImg}
+            {writeImg}
           </Col>
           <Col md={6} className="no-padding">
-            {renderWineImg}
+            {wineImg}
           </Col>
           <Col md={6} className="no-padding">
-            {renderMoneyImg}
+            {moneyImg}
           </Col>
           <Col md={6} className="no-padding">
-            {renderMysteryImg}
+            {mysteryImg}
           </Col>
         </Row>
       </Container>
