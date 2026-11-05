@@ -3,7 +3,7 @@
   top: 0;
   left: 0;
   height: 100vh;
-  width: 100vw;
+  width: 100%;
   opacity: 1;
   object-fit: cover;
   z-index: -1;
@@ -12,7 +12,7 @@
 .showcase {
   position: absolute;
   top: 100vh;
-  width: 100vw;
+  width: 100%;
   color: black;
 }
 
@@ -41,4 +41,40 @@
 .no-padding {
   padding: 0 !important;
   margin: 0 !important;
+}
+.planner-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  height: 100%;
+  padding: 2.5rem;
+  background: linear-gradient(135deg, #1c1f26 0%, #343a46 55%, #5a3d16 100%);
+  color: #fff;
+  text-align: center;
+}
+
+.planner-tile-content {
+  max-width: 34rem;
+}
+
+.planner-tile p {
+  margin-bottom: 1.5rem;
+  color: #e4e4e4;
+}
+
+.planner-tile-link {
+  font-weight: 600;
+}
+
+.showcase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+@media (max-width: 767.98px) {
+  .showcase-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

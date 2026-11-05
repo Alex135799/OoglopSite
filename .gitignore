@@ -11,6 +11,9 @@
 # production
 /dist
 
+# Kilo local plans (keep .kilo/ commands and agents committable)
+/.kilo/plans/
+
 # misc
 .DS_Store
 .env.local
