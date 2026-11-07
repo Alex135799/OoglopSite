@@ -95,14 +95,53 @@ machines produce a warning, while all unconnected idle machines are combined int
 finding, with their building links attached to the finding. This is a direct-component check, not
 a full belt/pipe chain graph.
 
-## Splitters
+## Splitters and mergers
 
-The planner reads actual `Build_*Splitter_C` entities from the save. It walks directed connection
-components (`ConveyorAny0` input to `ConveyorAny1` output, splitter input to outputs, merger inputs
-to output, pipe input/output sides) to find the upstream producers and downstream consumers of each
-splitter. The splitter's `StorageInventory` supplies the item currently on it. The line graph renders
-that actual splitter as a diamond `S` node between those buildings. Outgoing branches are divided
-equally for now; exact splitter behavior and rate accounting will be refined later.
+The planner reads actual `Build_*Splitter_C` and `Build_*Merger_C` entities from the save. It walks
+directed connection components (`ConveyorAny0` input to `ConveyorAny1` output, splitter/merger
+inputs to outputs, pipe input/output sides) to find the upstream producers and downstream consumers
+of each transport node. The node's `StorageInventory` supplies the item currently on it. Direct
+links stop at the next splitter, merger, or production building, so chains such as
+producer → splitter 1 → splitter 2 → consumer are preserved instead of being flattened. The line
+graph renders splitter diamonds as `S` and merger diamonds as `M` between those nodes. Flow is
+propagated through a chain with equal division at each splitter output; smart splitter/merger rules
+and exact rate accounting will be added later.
+
+## Supply line model
+
+`buildSupplyLineModel(model, line)` derives a line graph from the raw normalized save. It is not
+persisted. Nodes are `source`, `transformer` (`machine`, `generator`, or `sink`), `control`
+(`splitter`, `merger`, or `storage`), and `transport` (belt or pipe run). Ports carry item,
+expected rate, actual rate, neighbor IDs, and an optional unknown flag.
+
+Expected values are nameplate values at the configured recipe/clock/boost. Actual values come from a
+single forward topological solve: sources push expected output, controls route, transports clamp by
+capacity, transformers reduce output by the worst input ratio, generators use fuel availability, and
+sinks accept arriving flow. Cycles are marked unknown instead of solved. Downstream demand and
+backpressure are a TODO and are not applied yet. Unknown actual rates are `0` with `unknown: true`.
+
+Transport runs between controls/buildings are compressed from connected belt/pipe owners. Storage
+is a control subtype and is pass-through in v1; inventory contents are not modeled. Each
+control/transport run belongs to one line, assigned by the greatest overlap with that line's
+production buildings.
+
+## Transport port roles
+
+Every direct input port is classified as a **sink** (fed by a producer building) or a
+**continuation** (fed by another splitter/merger). Every direct output port is a **tap** (feeds a
+consumer) or a **continuation** (feeds another splitter/merger).
+
+A linear continuation chain is laid out as a vertical lane: each splitter/merger sits directly
+below the previous one, continuation edges are vertical, and tap/sink edges run horizontally to the
+production buildings. When a transport has exactly one tap, the transport is vertically centered on
+that machine; when the first transport has one sink producer that is not part of a stack, the
+producer is aligned to the same row. Other topologies fall back to the generic grouped layout.
+
+## Graph grouping
+
+The line graph groups production buildings that share the same recipe and the same direct upstream
+producer(s) into one vertical stack. Transport nodes remain individual so manifold chains stay
+visible. This is the first layout rule; other manifold/load-balancer rules can be layered on later.
 
 ## Item-flow allocation
 

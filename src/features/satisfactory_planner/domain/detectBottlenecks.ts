@@ -1,4 +1,11 @@
-import type { Building, Finding, NormalizedSave, ProductionLine, Severity } from './types';
+import type {
+  Building,
+  Finding,
+  NormalizedSave,
+  ProductionLine,
+  Severity,
+  SupplyLineModel,
+} from './types';
 import type { GameData } from '../api/gameData';
 
 export type DetectableModel = Pick<NormalizedSave, 'buildings' | 'lines' | 'power'>;
@@ -84,9 +91,102 @@ const lineFindings = (
   return findings;
 };
 
+const supplyLineFindings = (
+  supplyLines: SupplyLineModel[],
+  data: GameData,
+): Finding[] => {
+  const findings: Finding[] = [];
+  for (const line of supplyLines) {
+    let unknownItems = 0;
+    for (const input of line.summary.inputs) {
+      if (input.unknown) {
+        unknownItems += 1;
+        continue;
+      }
+      if (input.expectedRate > input.actualRate + 1e-6) {
+        const critical = input.actualRate < input.expectedRate * 0.8;
+        findings.push({
+          id: `line:${line.id}:deficit:${input.itemId}`,
+          severity: critical ? 'critical' : 'warning',
+          kind: 'line_deficit',
+          message: `${itemLabel(data, input.itemId)} shortfall in ${line.name}: expected ${number(input.expectedRate)} ${input.unit}, actual ${number(input.actualRate)} ${input.unit}.`,
+          lineId: line.id,
+          buildingIds: line.buildingIds,
+          itemId: input.itemId,
+          required: input.expectedRate,
+          available: input.actualRate,
+          unit: input.unit,
+        });
+      }
+    }
+    for (const output of line.summary.outputs) {
+      if (output.unknown) {
+        unknownItems += 1;
+        continue;
+      }
+      if (output.expectedRate > output.actualRate + 1e-6) {
+        findings.push({
+          id: `line:${line.id}:shortfall:${output.itemId}`,
+          severity: 'warning',
+          kind: 'line_deficit',
+          message: `${itemLabel(data, output.itemId)} production shortfall in ${line.name}: expected ${number(output.expectedRate)} ${output.unit}, actual ${number(output.actualRate)} ${output.unit}.`,
+          lineId: line.id,
+          buildingIds: line.buildingIds,
+          itemId: output.itemId,
+          required: output.expectedRate,
+          available: output.actualRate,
+          unit: output.unit,
+        });
+      }
+    }
+    if (unknownItems > 0) {
+      findings.push({
+        id: `line:${line.id}:unknown`,
+        severity: 'info',
+        kind: 'unmodeled',
+        message: `${unknownItems} boundary item(s) in ${line.name} have unknown actual rates.`,
+        lineId: line.id,
+        buildingIds: line.buildingIds,
+      });
+    }
+
+    const starved = line.summary.bottlenecks.filter((entry) =>
+      entry.reason.includes('starvation'),
+    );
+    if (starved.length > 0) {
+      findings.push({
+        id: `line:${line.id}:starved`,
+        severity: 'warning',
+        kind: 'line_deficit',
+        message: `${starved.length} transformer(s) in ${line.name} are starved of inputs.`,
+        lineId: line.id,
+        buildingIds: starved.map((entry) => entry.nodeId),
+        required: starved.reduce((sum, entry) => sum + entry.expectedRate, 0),
+        available: starved.reduce((sum, entry) => sum + entry.actualRate, 0),
+      });
+    }
+
+    const unknownTransports = line.summary.bottlenecks.filter((entry) =>
+      entry.reason.includes('Transport'),
+    );
+    if (unknownTransports.length > 0) {
+      findings.push({
+        id: `line:${line.id}:unknown-transports`,
+        severity: 'info',
+        kind: 'unmodeled',
+        message: `${unknownTransports.length} transport segment(s) in ${line.name} have unknown capacity or item.`,
+        lineId: line.id,
+        buildingIds: unknownTransports.slice(0, 20).map((entry) => entry.nodeId),
+      });
+    }
+  }
+  return findings;
+};
+
 export const detectBottlenecks = (
   model: DetectableModel,
   data: GameData,
+  supplyLines?: SupplyLineModel[],
 ): Finding[] => {
   const findings: Finding[] = [];
 
@@ -125,7 +225,7 @@ export const detectBottlenecks = (
     });
   }
 
-  findings.push(...lineFindings(model.lines, data));
+  findings.push(...(supplyLines ? supplyLineFindings(supplyLines, data) : lineFindings(model.lines, data)));
 
   for (const [key, group] of groupedUnmodeled(model.buildings, data)) {
     if (key === 'idle:unconnected') {

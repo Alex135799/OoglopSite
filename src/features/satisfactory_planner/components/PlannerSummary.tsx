@@ -6,19 +6,20 @@ import Chip from '@mui/material/Chip';
 import LinearProgress from '@mui/material/LinearProgress';
 import Typography from '@mui/material/Typography';
 import type { NormalizedSave } from '../domain/types';
+import type { PlannerAnalysis } from '../domain/analyzeModel';
 import { summarizeFindings } from '../domain/detectBottlenecks';
-import { getLineStats } from '../domain/lineStats';
 import { formatMW, formatNumber, formatPercent } from '../format';
 import { usePlannerColors } from '../theme';
 
 export interface PlannerSummaryProps {
   model: NormalizedSave;
+  analysis: PlannerAnalysis;
 }
 
-export const PlannerSummary = ({ model }: PlannerSummaryProps) => {
+export const PlannerSummary = ({ model, analysis }: PlannerSummaryProps) => {
   const colors = usePlannerColors();
-  const findings = summarizeFindings(model.findings);
-  const lineStats = getLineStats(model);
+  const findings = summarizeFindings(analysis.findings);
+  const lineStats = analysis.lineStats;
   const powerColor =
     model.power.headroom < 0
       ? 'error'

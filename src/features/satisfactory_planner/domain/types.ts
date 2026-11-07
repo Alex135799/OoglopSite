@@ -88,12 +88,29 @@ export interface Finding {
   unit?: string;
 }
 
+export interface TransportRun {
+  id: string;
+  medium: 'belt' | 'pipe';
+  typeId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  itemId?: string;
+  capacity?: number;
+  segmentCount: number;
+  segmentIds: string[];
+}
+
 export interface SplitterNode {
   id: string;
   typeId: string;
+  kind: 'splitter' | 'merger' | 'storage';
   itemId?: string;
   inputs: string[];
   outputs: string[];
+  directInputs?: string[];
+  directOutputs?: string[];
+  inputRoles?: { id: string; role: 'sink' | 'continuation' }[];
+  outputRoles?: { id: string; role: 'tap' | 'continuation' }[];
 }
 
 export interface Coverage {
@@ -122,6 +139,8 @@ export interface NormalizedSave {
     size: number;
   };
   buildings: Building[];
+  transportNodes?: SplitterNode[];
+  transportRuns?: TransportRun[];
   splitters?: SplitterNode[];
   lines: ProductionLine[];
   power: PowerSummary;
@@ -129,6 +148,129 @@ export interface NormalizedSave {
   coverage: Coverage;
   counts: SaveCounts;
   warnings: string[];
+}
+
+export interface SupplyInputPort {
+  id: string;
+  itemId: string;
+  expectedRate: number;
+  actualRate: number;
+  unknown?: boolean;
+  previousNodeId?: string;
+  notes?: string[];
+}
+
+export interface SupplyOutputPort {
+  id: string;
+  itemId: string;
+  expectedRate: number;
+  actualRate: number;
+  unknown?: boolean;
+  nextNodeId?: string;
+  notes?: string[];
+}
+
+interface SupplyNodeBase {
+  id: string;
+  displayName: string;
+  producerIds?: string[];
+  position?: Vec3;
+  notes?: string[];
+}
+
+export interface SupplySourceNode extends SupplyNodeBase {
+  type: 'source';
+  outputs: SupplyOutputPort[];
+  clock: number;
+  boost: number;
+  shards: number;
+  expectedPower: number;
+  actualPower: number;
+}
+
+export interface SupplyTransformerNode extends SupplyNodeBase {
+  type: 'transformer';
+  kind: 'machine' | 'generator' | 'sink';
+  recipeId?: string;
+  recipeName?: string;
+  inputs: SupplyInputPort[];
+  outputs: SupplyOutputPort[];
+  clock: number;
+  boost: number;
+  shards: number;
+  expectedPower: number;
+  actualPower: number;
+  expectedPowerGeneration: number;
+  actualPowerGeneration: number;
+}
+
+export interface SupplyControlNode extends SupplyNodeBase {
+  type: 'control';
+  kind: 'splitter' | 'merger' | 'storage';
+  itemId?: string;
+  inputs: SupplyInputPort[];
+  outputs: SupplyOutputPort[];
+  expectedThroughput: number;
+  actualThroughput: number;
+  buffered?: boolean;
+}
+
+export interface SupplyTransportNode extends SupplyNodeBase {
+  type: 'transport';
+  inputs: SupplyInputPort[];
+  outputs: SupplyOutputPort[];
+  medium: 'belt' | 'pipe';
+  itemId?: string;
+  capacity?: number;
+  expectedRate: number;
+  actualRate: number;
+  unknown?: boolean;
+  segmentCount?: number;
+  fromNodeId?: string;
+  toNodeId?: string;
+}
+
+export type SupplyNode =
+  | SupplySourceNode
+  | SupplyTransformerNode
+  | SupplyControlNode
+  | SupplyTransportNode;
+
+export interface SupplyRateSummary {
+  itemId: string;
+  expectedRate: number;
+  actualRate: number;
+  unit: 'items/min' | 'm³/min';
+  unknown?: boolean;
+}
+
+export interface SupplyLineSummary {
+  inputs: SupplyRateSummary[];
+  outputs: SupplyRateSummary[];
+  power: {
+    expectedConsumption: number;
+    actualConsumption: number;
+    expectedGeneration: number;
+    actualGeneration: number;
+  };
+  bottlenecks: {
+    nodeId: string;
+    itemId?: string;
+    expectedRate: number;
+    actualRate: number;
+    reason: string;
+  }[];
+}
+
+export interface SupplyLineModel {
+  id: string;
+  name: string;
+  roots: string[];
+  nodes: Record<string, SupplyNode>;
+  summary: SupplyLineSummary;
+  notes: string[];
+  buildingIds: string[];
+  transportNodeIds: string[];
 }
 
 export interface BuildingChange {

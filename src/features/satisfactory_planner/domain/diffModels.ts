@@ -3,19 +3,21 @@ import type {
   BuildingChange,
   CheckpointRecord,
   Finding,
-  LineBalance,
   LineChange,
   LineSummary,
   ModelDiff,
   NormalizedSave,
-  ProductionLine,
+  SupplyLineModel,
 } from './types';
 import { round } from './rateMath';
+import { analyzeModel } from './analyzeModel';
 
-const outputSignature = (line: ProductionLine): string =>
-  line.outputItems.length > 0 ? [...line.outputItems].sort().join('|') : '∅';
+const outputSignature = (line: SupplyLineModel): string =>
+  line.summary.outputs.length > 0
+    ? line.summary.outputs.map((entry) => entry.itemId).sort().join('|')
+    : '∅';
 
-const sortLines = (lines: ProductionLine[]): ProductionLine[] =>
+const sortLines = (lines: SupplyLineModel[]): SupplyLineModel[] =>
   [...lines].sort(
     (a, b) =>
       outputSignature(a).localeCompare(outputSignature(b)) ||
@@ -23,23 +25,27 @@ const sortLines = (lines: ProductionLine[]): ProductionLine[] =>
       a.buildingIds.join(',').localeCompare(b.buildingIds.join(',')),
   );
 
-const summarizeLine = (line: ProductionLine, key: string): LineSummary => ({
+const summarizeLine = (line: SupplyLineModel, key: string): LineSummary => ({
   key,
   name: line.name,
-  outputItems: line.outputItems,
+  outputItems: line.summary.outputs.map((entry) => entry.itemId),
   buildingCount: line.buildingIds.length,
-  balance: line.balance,
+  balance: line.summary.outputs.map((entry) => ({
+    itemId: entry.itemId,
+    supply: entry.actualRate,
+    demand: entry.expectedRate,
+  })),
 });
 
 interface MatchedLine {
   key: string;
-  before?: ProductionLine;
-  after?: ProductionLine;
+  before?: SupplyLineModel;
+  after?: SupplyLineModel;
 }
 
-const matchLines = (before: ProductionLine[], after: ProductionLine[]): MatchedLine[] => {
-  const beforeGroups = new Map<string, ProductionLine[]>();
-  const afterGroups = new Map<string, ProductionLine[]>();
+const matchLines = (before: SupplyLineModel[], after: SupplyLineModel[]): MatchedLine[] => {
+  const beforeGroups = new Map<string, SupplyLineModel[]>();
+  const afterGroups = new Map<string, SupplyLineModel[]>();
   for (const line of sortLines(before)) {
     const signature = outputSignature(line);
     const list = beforeGroups.get(signature) ?? [];
@@ -70,10 +76,10 @@ const matchLines = (before: ProductionLine[], after: ProductionLine[]): MatchedL
   return matches;
 };
 
-const balanceMap = (balance: LineBalance[]): Map<string, number> =>
-  new Map(balance.map((entry) => [entry.itemId, entry.supply]));
+const balanceMap = (line: SupplyLineModel): Map<string, number> =>
+  new Map(line.summary.outputs.map((entry) => [entry.itemId, entry.actualRate]));
 
-const lineChanges = (before: ProductionLine[], after: ProductionLine[]) => {
+const lineChanges = (before: SupplyLineModel[], after: SupplyLineModel[]) => {
   const added: LineSummary[] = [];
   const removed: LineSummary[] = [];
   const changed: LineChange[] = [];
@@ -89,8 +95,8 @@ const lineChanges = (before: ProductionLine[], after: ProductionLine[]) => {
     }
     const beforeLine = match.before!;
     const afterLine = match.after!;
-    const beforeBalance = balanceMap(beforeLine.balance);
-    const afterBalance = balanceMap(afterLine.balance);
+    const beforeBalance = balanceMap(beforeLine);
+    const afterBalance = balanceMap(afterLine);
     const items = new Set([...beforeBalance.keys(), ...afterBalance.keys()]);
     const rateDeltas = [...items]
       .map((itemId) => {
@@ -179,6 +185,8 @@ export const diffModels = (
   after: NormalizedSave,
   meta: DiffMeta = {},
 ): ModelDiff => {
+  const beforeAnalysis = analyzeModel(before);
+  const afterAnalysis = analyzeModel(after);
   return {
     from: {
       label: meta.beforeLabel ?? before.source.fileName,
@@ -189,7 +197,7 @@ export const diffModels = (
       createdAt: meta.afterCreatedAt ?? after.importedAt,
     },
     buildings: findBuildingChanges(before.buildings, after.buildings),
-    lines: lineChanges(before.lines, after.lines),
+    lines: lineChanges(beforeAnalysis.supplyLines, afterAnalysis.supplyLines),
     power: {
       before: before.power,
       after: after.power,
@@ -203,7 +211,7 @@ export const diffModels = (
       ratioDelta: round(after.coverage.ratio - before.coverage.ratio, 4),
       modeledDelta: after.coverage.modeledBuildings - before.coverage.modeledBuildings,
     },
-    findings: diffFindings(before.findings, after.findings),
+    findings: diffFindings(beforeAnalysis.findings, afterAnalysis.findings),
   };
 };
 

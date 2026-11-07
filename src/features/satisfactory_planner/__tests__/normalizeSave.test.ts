@@ -5,6 +5,7 @@ import type { SatisfactorySave } from '@etothepii/satisfactory-file-parser';
 import { normalizeSave } from '../domain/normalizeSave';
 import { gameData } from '../api/gameData';
 import { parseSaveBuffer } from '../api/parseSave';
+import { analyzeModel } from '../domain/analyzeModel';
 
 const fixtureUrl = new URL('../fixtures/Another-1-2.sav', import.meta.url);
 
@@ -95,7 +96,9 @@ describe('normalizeSave', () => {
     });
     expect(parsed.lines).toHaveLength(1);
     expect(parsed.lines[0].outputItems).toEqual(['Desc_SAM_C']);
-    expect(parsed.findings.some((finding) => finding.kind === 'power_deficit')).toBe(true);
+    expect(analyzeModel(parsed).findings.some((finding) => finding.kind === 'power_deficit')).toBe(
+      true,
+    );
     expect(parsed.warnings).toEqual([]);
     expect(JSON.parse(JSON.stringify(parsed))).toEqual(parsed);
   });
@@ -602,12 +605,77 @@ describe('normalizeSave', () => {
       }),
     ]);
     const result = normalizeSave(save, options);
-    expect(result.splitters).toEqual([
+    expect(result.transportNodes).toEqual([
       {
         id: 'Persistent_Level:PersistentLevel.Splitter1',
         typeId: 'Build_ConveyorAttachmentSplitter_C',
+        kind: 'splitter',
         inputs: ['Persistent_Level:PersistentLevel.A'],
         outputs: ['Persistent_Level:PersistentLevel.B', 'Persistent_Level:PersistentLevel.C'],
+        directInputs: ['Persistent_Level:PersistentLevel.A'],
+        directOutputs: ['Persistent_Level:PersistentLevel.B', 'Persistent_Level:PersistentLevel.C'],
+        inputRoles: [{ id: 'Persistent_Level:PersistentLevel.A', role: 'sink' }],
+        outputRoles: [
+          { id: 'Persistent_Level:PersistentLevel.B', role: 'tap' },
+          { id: 'Persistent_Level:PersistentLevel.C', role: 'tap' },
+        ],
+      },
+    ]);
+  });
+
+
+  it('collects actual mergers with their upstream and downstream buildings', () => {
+    const save = makeSave([
+      entity('/Game/Buildable/Factory/ConstructorMk1/Build_ConstructorMk1.Build_ConstructorMk1_C', 'Persistent_Level:PersistentLevel.MA', {
+        mCurrentRecipe: property('ObjectProperty', {
+          pathName: '/Game/Recipes/Recipe_IronPlate.Recipe_IronPlate_C',
+        }),
+      }),
+      entity('/Game/Buildable/Factory/ConstructorMk1/Build_ConstructorMk1.Build_ConstructorMk1_C', 'Persistent_Level:PersistentLevel.MB', {
+        mCurrentRecipe: property('ObjectProperty', {
+          pathName: '/Game/Recipes/Recipe_IronPlate.Recipe_IronPlate_C',
+        }),
+      }),
+      entity('/Game/Buildable/Factory/ConstructorMk1/Build_ConstructorMk1.Build_ConstructorMk1_C', 'Persistent_Level:PersistentLevel.MC', {
+        mCurrentRecipe: property('ObjectProperty', {
+          pathName: '/Game/Recipes/Recipe_IronPlate.Recipe_IronPlate_C',
+        }),
+      }),
+      entity('/Game/Buildable/Factory/ConveyorAttachmentMerger/Build_ConveyorAttachmentMerger.Build_ConveyorAttachmentMerger_C', 'Persistent_Level:PersistentLevel.Merger1', {}),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.MA.Output0', {}),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.MB.Output0', {}),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.MC.Input0', {}),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.Merger1.Input1', {
+        mConnectedComponent: property('ObjectProperty', {
+          pathName: 'Persistent_Level:PersistentLevel.MA.Output0',
+        }),
+      }),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.Merger1.Input2', {
+        mConnectedComponent: property('ObjectProperty', {
+          pathName: 'Persistent_Level:PersistentLevel.MB.Output0',
+        }),
+      }),
+      component('/Script/FactoryGame.FGFactoryConnectionComponent', 'Persistent_Level:PersistentLevel.Merger1.Output1', {
+        mConnectedComponent: property('ObjectProperty', {
+          pathName: 'Persistent_Level:PersistentLevel.MC.Input0',
+        }),
+      }),
+    ]);
+    const result = normalizeSave(save, options);
+    expect(result.transportNodes).toEqual([
+      {
+        id: 'Persistent_Level:PersistentLevel.Merger1',
+        typeId: 'Build_ConveyorAttachmentMerger_C',
+        kind: 'merger',
+        inputs: ['Persistent_Level:PersistentLevel.MA', 'Persistent_Level:PersistentLevel.MB'],
+        outputs: ['Persistent_Level:PersistentLevel.MC'],
+        directInputs: ['Persistent_Level:PersistentLevel.MA', 'Persistent_Level:PersistentLevel.MB'],
+        directOutputs: ['Persistent_Level:PersistentLevel.MC'],
+        inputRoles: [
+          { id: 'Persistent_Level:PersistentLevel.MA', role: 'sink' },
+          { id: 'Persistent_Level:PersistentLevel.MB', role: 'sink' },
+        ],
+        outputRoles: [{ id: 'Persistent_Level:PersistentLevel.MC', role: 'tap' }],
       },
     ]);
   });

@@ -5,13 +5,19 @@ import Chip from '@mui/material/Chip';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
 import Typography from '@mui/material/Typography';
-import type { Finding, ProductionLine, Severity } from '../domain/types';
+import type { Finding, ProductionLine, Severity, SupplyLineModel } from '../domain/types';
 import { formatNumber, itemName } from '../format';
 import { plannerColors, usePlannerColors } from '../theme';
 
 const INITIAL_LINES = 40;
 
-const severityForLine = (line: ProductionLine, findings: Finding[]): Severity | undefined => {
+const isSupplyLine = (line: SupplyLineModel | ProductionLine): line is SupplyLineModel =>
+  'summary' in line;
+
+const severityForLine = (
+  line: SupplyLineModel | ProductionLine,
+  findings: Finding[],
+): Severity | undefined => {
   const ids = new Set(line.buildingIds);
   const forLine = findings.filter(
     (finding) =>
@@ -38,7 +44,7 @@ const badgeFor = (severity: Severity | undefined) => {
 };
 
 export interface LineListProps {
-  lines: ProductionLine[];
+  lines: (SupplyLineModel | ProductionLine)[];
   findings: Finding[];
   selectedLineId?: string;
   onSelect: (lineId: string) => void;
@@ -66,7 +72,25 @@ export const LineList = ({ lines, findings, selectedLineId, onSelect }: LineList
       <List disablePadding>
         {visible.map((line) => {
           const severity = severityForLine(line, findings);
-          const deficits = line.balance.filter((entry) => entry.demand > entry.supply + 1e-6);
+          const supply = isSupplyLine(line);
+          const deficits = supply
+            ? line.summary.inputs
+                .filter((entry) => entry.expectedRate > entry.actualRate + 1e-6)
+                .map((entry) => ({
+                  itemId: entry.itemId,
+                  supply: entry.actualRate,
+                  demand: entry.expectedRate,
+                }))
+            : line.balance
+                .filter((entry) => entry.demand > entry.supply + 1e-6)
+                .map((entry) => ({
+                  itemId: entry.itemId,
+                  supply: entry.supply,
+                  demand: entry.demand,
+                }));
+          const outputItems = supply
+            ? line.summary.outputs.map((entry) => entry.itemId)
+            : line.outputItems;
           return (
             <ListItemButton
               key={line.id}
@@ -91,7 +115,7 @@ export const LineList = ({ lines, findings, selectedLineId, onSelect }: LineList
                 <Typography component="span" variant="caption">
                   {formatNumber(line.buildingIds.length)} buildings
                 </Typography>
-                {line.outputItems.slice(0, 3).map((itemId) => (
+                {outputItems.slice(0, 3).map((itemId) => (
                   <Chip
                     key={itemId}
                     size="small"
@@ -99,9 +123,9 @@ export const LineList = ({ lines, findings, selectedLineId, onSelect }: LineList
                     variant="outlined"
                   />
                 ))}
-                {line.outputItems.length > 3 && (
+                {outputItems.length > 3 && (
                   <Typography component="span" variant="caption" className="planner-muted">
-                    +{line.outputItems.length - 3}
+                    +{outputItems.length - 3}
                   </Typography>
                 )}
               </Box>

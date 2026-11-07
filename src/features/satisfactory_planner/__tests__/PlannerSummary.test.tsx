@@ -1,13 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PlannerSummary } from '../components/PlannerSummary';
+import { analyzeModel } from '../domain/analyzeModel';
 import { building, line, model } from './helpers';
 
 describe('PlannerSummary', () => {
   it('renders warnings, unmodeled types and a power deficit', () => {
-    render(
-      <PlannerSummary
-        model={model({
+    const summaryModel = model({
           source: { fileName: 'big.sav', sha256: 'e'.repeat(64), size: 2048 },
           warnings: ['Save is newer than the dataset.', 'Modded content detected.'],
           buildings: [building('A'), building('B')],
@@ -30,17 +29,8 @@ describe('PlannerSummary', () => {
             consumers: 2,
             unmodeledGenerators: 0,
           },
-          findings: [
-            {
-              id: 'power',
-              severity: 'critical',
-              kind: 'power_deficit',
-              message: 'deficit',
-            },
-          ],
-        })}
-      />,
-    );
+        });
+    render(<PlannerSummary model={summaryModel} analysis={analyzeModel(summaryModel)} />);
 
     expect(screen.getByText('Save is newer than the dataset.')).toBeInTheDocument();
     expect(screen.getByText('Modded content detected.')).toBeInTheDocument();
@@ -52,9 +42,7 @@ describe('PlannerSummary', () => {
   });
 
   it('hides the unsupported section when there are none', () => {
-    render(
-      <PlannerSummary
-        model={model({
+    const summaryModel = model({
           buildings: [building('A'), building('B')],
           lines: [line('line-1', ['A', 'B'], { outputItems: ['Desc_IronPlate_C'] })],
           coverage: {
@@ -63,9 +51,8 @@ describe('PlannerSummary', () => {
             ratio: 1,
             unmodeledTypes: [],
           },
-        })}
-      />,
-    );
+        });
+    render(<PlannerSummary model={summaryModel} analysis={analyzeModel(summaryModel)} />);
     expect(screen.queryByText(/Unsupported types:/)).not.toBeInTheDocument();
     expect(screen.getByText('100%')).toBeInTheDocument();
   });

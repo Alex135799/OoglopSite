@@ -12,12 +12,13 @@ import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
-import type { Building } from '../domain/types';
+import type { Building, SupplyNode } from '../domain/types';
 import { formatMW, formatNumber, itemName, itemUnit } from '../format';
 import { usePlannerColors } from '../theme';
 
 export interface BuildingDetailsProps {
   building?: Building;
+  supplyNode?: SupplyNode;
   onClose: () => void;
 }
 
@@ -31,8 +32,10 @@ const Fact = ({ label, children }: { label: string; children: ReactNode }) => {
   );
 };
 
-export const BuildingDetails = ({ building, onClose }: BuildingDetailsProps) => {
+export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetailsProps) => {
   const colors = usePlannerColors();
+  const supplyInputs = supplyNode && supplyNode.type !== 'source' ? supplyNode.inputs : [];
+  const supplyOutputs = supplyNode?.outputs ?? [];
   if (!building) {
     return (
       <Card>
@@ -104,8 +107,19 @@ export const BuildingDetails = ({ building, onClose }: BuildingDetailsProps) => 
           <Fact label="Clock">{formatNumber(building.clock * 100, 1)}%</Fact>
           <Fact label="Somersloop boost">{formatNumber(building.boost * 100, 1)}%</Fact>
           <Fact label="Power shards">{formatNumber(building.shards)}</Fact>
-          <Fact label="Power use">{formatMW(building.powerConsumption)}</Fact>
-          <Fact label="Power generation">{formatMW(building.powerGeneration)}</Fact>
+          <Fact label="Power use">
+            {formatMW(building.powerConsumption)}
+            {supplyNode?.type === 'transformer' && supplyNode.actualPower !== supplyNode.expectedPower
+              ? ` / ${formatMW(supplyNode.actualPower)} actual`
+              : ''}
+          </Fact>
+          <Fact label="Power generation">
+            {formatMW(building.powerGeneration)}
+            {supplyNode?.type === 'transformer' &&
+            supplyNode.actualPowerGeneration !== supplyNode.expectedPowerGeneration
+              ? ` / ${formatMW(supplyNode.actualPowerGeneration)} actual`
+              : ''}
+          </Fact>
           {building.location && (
             <Fact label="Position">
               {formatNumber(building.location.x)}, {formatNumber(building.location.y)},{' '}
@@ -114,7 +128,51 @@ export const BuildingDetails = ({ building, onClose }: BuildingDetailsProps) => 
           )}
         </Box>
 
-        {building.inputs.length > 0 && (
+        {supplyInputs.length > 0 && (
+          <>
+            <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
+              Inputs
+            </Typography>
+            <Table size="small" className="planner-rate-table">
+              <TableBody>
+                {supplyInputs.map((input) => (
+                  <TableRow key={input.id}>
+                    <TableCell>{itemName(input.itemId)}</TableCell>
+                    <TableCell align="right">
+                      {formatNumber(input.expectedRate)} expected ·{' '}
+                      {input.unknown ? 'unknown' : formatNumber(input.actualRate)} actual{' '}
+                      {itemUnit(input.itemId)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        )}
+
+        {supplyOutputs.length > 0 && (
+          <>
+            <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
+              Outputs
+            </Typography>
+            <Table size="small" className="planner-rate-table">
+              <TableBody>
+                {supplyOutputs.map((output) => (
+                  <TableRow key={output.id}>
+                    <TableCell>{itemName(output.itemId)}</TableCell>
+                    <TableCell align="right">
+                      {formatNumber(output.expectedRate)} expected ·{' '}
+                      {output.unknown ? 'unknown' : formatNumber(output.actualRate)} actual{' '}
+                      {itemUnit(output.itemId)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        )}
+
+        {!supplyNode && building.inputs.length > 0 && (
           <>
             <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
               Inputs
@@ -134,7 +192,7 @@ export const BuildingDetails = ({ building, onClose }: BuildingDetailsProps) => 
           </>
         )}
 
-        {building.outputs.length > 0 && (
+        {!supplyNode && building.outputs.length > 0 && (
           <>
             <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
               Outputs

@@ -1,7 +1,6 @@
 import { Parser } from '@etothepii/satisfactory-file-parser';
 import type { NormalizedSave, ParseProgress } from '../domain/types';
 import { buildLines } from '../domain/buildLines';
-import { detectBottlenecks } from '../domain/detectBottlenecks';
 import { normalizeSave } from '../domain/normalizeSave';
 import { gameData, itemName } from './gameData';
 import { PlannerException, parseErrorMessage } from './plannerError';
@@ -65,7 +64,7 @@ export const parseSaveBuffer = (
   model.lines = buildLines(model.buildings, {
     itemName: (itemId) => itemName(gameData, itemId),
   });
-  model.findings = detectBottlenecks(model, gameData);
+  model.findings = [];
 
   onProgress?.({ phase: 'done', progress: 1 });
   return model;

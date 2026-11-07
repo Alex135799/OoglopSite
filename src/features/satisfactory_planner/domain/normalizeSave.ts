@@ -11,6 +11,7 @@ import type {
   NormalizedSave,
   SaveCounts,
   SplitterNode,
+  TransportRun,
 } from '../domain/types';
 import { gameData, resolveTypeId, type GameData, type GameRecipe } from '../api/gameData';
 import { effectiveMultiplier, estimatedPower, extractorRate, perMinute, round } from './rateMath';
@@ -261,12 +262,21 @@ const connectionRole = (component: SaveObject): 'in' | 'out' | undefined => {
   return undefined;
 };
 
-const collectSplitters = (
+const collectTransportNodes = (
   objects: SaveObject[],
   buildings: Building[],
   index: Map<string, SaveObject>,
-): SplitterNode[] => {
+  data: GameData,
+): { nodes: SplitterNode[]; runs: TransportRun[] } => {
   const byId = new Map(buildings.map((building) => [building.id, building]));
+  const transportOwnerIds = new Set(
+    objects
+      .filter((object) => {
+        const typeId = classNameFromPath(object.typePath);
+        return Boolean(typeId && /Splitter|Merger|Storage/i.test(typeId));
+      })
+      .map((object) => object.instanceName),
+  );
   const components = objects.filter(
     (object) =>
       (object as SaveComponent).type === 'SaveComponent' &&
@@ -313,7 +323,11 @@ const collectSplitters = (
     }
   }
 
-  const traverse = (start: string, direction: 'forward' | 'reverse'): Set<string> => {
+  const traverse = (
+    start: string,
+    direction: 'forward' | 'reverse',
+    stopAtTransport: boolean,
+  ): Set<string> => {
     const found = new Set<string>();
     const seen = new Set<string>([start]);
     const queue = [start];
@@ -327,7 +341,7 @@ const collectSplitters = (
         if (!object) continue;
         const owner = ownerIdOf(object);
         if (!owner) continue;
-        if (byId.has(owner)) {
+        if (byId.has(owner) || (stopAtTransport && transportOwnerIds.has(owner))) {
           found.add(owner);
           continue;
         }
@@ -337,41 +351,129 @@ const collectSplitters = (
     return found;
   };
 
-  const splitters: SplitterNode[] = [];
+  const nodes: SplitterNode[] = [];
   for (const object of objects) {
     const typeId = classNameFromPath(object.typePath);
-    if (!typeId || !/Splitter/i.test(typeId)) continue;
-    const splitterComponents = componentsByOwner.get(object.instanceName) ?? [];
-    const inputComponents = splitterComponents.filter(
+    if (!typeId || !/Splitter|Merger|Storage/i.test(typeId)) continue;
+    const transportComponents = componentsByOwner.get(object.instanceName) ?? [];
+    const inputComponents = transportComponents.filter(
       (component) => connectionRole(component) === 'in',
     );
-    const outputComponents = splitterComponents.filter(
+    const outputComponents = transportComponents.filter(
       (component) => connectionRole(component) === 'out',
     );
     if (inputComponents.length === 0 || outputComponents.length === 0) continue;
 
     const inputs = new Set<string>();
+    const directInputs = new Set<string>();
     for (const component of inputComponents) {
-      for (const id of traverse(component.instanceName, 'reverse')) inputs.add(id);
+      for (const id of traverse(component.instanceName, 'reverse', false)) inputs.add(id);
+      for (const id of traverse(component.instanceName, 'reverse', true)) directInputs.add(id);
     }
     const outputs = new Set<string>();
+    const directOutputs = new Set<string>();
     for (const component of outputComponents) {
-      for (const id of traverse(component.instanceName, 'forward')) outputs.add(id);
+      for (const id of traverse(component.instanceName, 'forward', false)) outputs.add(id);
+      for (const id of traverse(component.instanceName, 'forward', true)) directOutputs.add(id);
     }
     for (const id of inputs) outputs.delete(id);
+    for (const id of directInputs) directOutputs.delete(id);
     if (inputs.size === 0 || outputs.size === 0) continue;
+    if (directInputs.size === 0 || directOutputs.size === 0) continue;
 
     const storage = index.get(`${object.instanceName}.StorageInventory`);
     const itemId = firstItemIn(storage);
-    splitters.push({
+    const directInputList = [...directInputs].sort();
+    const directOutputList = [...directOutputs].sort();
+    nodes.push({
       id: object.instanceName,
       typeId,
+      kind: /Merger/i.test(typeId) ? 'merger' : /Storage/i.test(typeId) ? 'storage' : 'splitter',
       ...(itemId ? { itemId } : {}),
       inputs: [...inputs].sort(),
       outputs: [...outputs].sort(),
+      directInputs: directInputList,
+      directOutputs: directOutputList,
+      inputRoles: directInputList.map((id) => ({
+        id,
+        role: transportOwnerIds.has(id) ? 'continuation' : 'sink',
+      })),
+      outputRoles: directOutputList.map((id) => ({
+        id,
+        role: transportOwnerIds.has(id) ? 'continuation' : 'tap',
+      })),
     });
   }
-  return splitters;
+
+  const runMap = new Map<string, TransportRun>();
+  const isEndpointOwner = (owner: string) =>
+    byId.has(owner) || transportOwnerIds.has(owner);
+  for (const startOwner of new Set([
+    ...buildings.map((building) => building.id),
+    ...transportOwnerIds,
+  ])) {
+    const ownerComponents = componentsByOwner.get(startOwner) ?? [];
+    for (const component of ownerComponents) {
+      if (connectionRole(component) !== 'out') continue;
+      const queue: { component: string; segments: string[] }[] = [
+        { component: component.instanceName, segments: [] },
+      ];
+      const seen = new Set<string>([component.instanceName]);
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        for (const next of forward.get(current.component) ?? []) {
+          if (seen.has(next)) continue;
+          seen.add(next);
+          const object = index.get(next);
+          if (!object) continue;
+          const owner = ownerIdOf(object);
+          if (!owner || owner === startOwner) continue;
+          if (isEndpointOwner(owner)) {
+            if (current.segments.length === 0) continue;
+            const segmentIds = current.segments;
+            const key = `${startOwner}\u0000${owner}\u0000${segmentIds.join('\u0000')}`;
+            if (runMap.has(key)) continue;
+            const segmentTypes = segmentIds.map((id) =>
+              classNameFromPath(index.get(id)?.typePath),
+            );
+            const capacities = segmentTypes.map((typeId) => {
+              if (!typeId) return undefined;
+              const lift = /Build_ConveyorLiftMk(\d+)_C$/.exec(typeId);
+              return (
+                data.belts[typeId]?.rate ??
+                data.pipes[typeId]?.rate ??
+                (lift
+                  ? data.belts[`Build_ConveyorBeltMk${lift[1]}_C`]?.rate
+                  : undefined)
+              );
+            });
+            const capacity = capacities.every((value) => value !== undefined)
+              ? Math.min(...capacities as number[])
+              : undefined;
+            const medium = segmentTypes.some(
+              (typeId) => typeId && data.pipes[typeId] !== undefined,
+            )
+              ? 'pipe'
+              : 'belt';
+            runMap.set(key, {
+              id: `run:${startOwner}->${owner}:${segmentIds.length}`,
+              medium,
+              typeId: segmentTypes.find(Boolean) ?? 'belt',
+              fromNodeId: startOwner,
+              toNodeId: owner,
+              ...(capacity !== undefined ? { capacity } : {}),
+              segmentCount: segmentIds.length,
+              segmentIds,
+            });
+            continue;
+          }
+          queue.push({ component: next, segments: [...current.segments, owner] });
+        }
+      }
+    }
+  }
+
+  return { nodes, runs: [...runMap.values()] };
 };
 
 const inferExtractorResources = (
@@ -618,7 +720,8 @@ export const normalizeSave = (
   inferExtractorResources(buildings, data, physicalConnectivity);
 
   buildings.sort((a, b) => a.id.localeCompare(b.id));
-  const splitters = collectSplitters(objects, buildings, index);
+  const transportData = collectTransportNodes(objects, buildings, index, data);
+  const transportNodes = transportData.nodes;
 
   const modeled = buildings.filter((building) => building.modeled);
   const generatorCount = buildings.filter((building) => building.powerGeneration > 0).length;
@@ -666,7 +769,8 @@ export const normalizeSave = (
       size: options.size,
     },
     buildings,
-    splitters,
+    transportNodes,
+    transportRuns: transportData.runs,
     lines: [],
     power: {
       generation,

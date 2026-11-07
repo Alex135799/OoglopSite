@@ -20,17 +20,17 @@ const testModel = (): NormalizedSave =>
     },
     buildings: [
       building('A', {
+        typeId: 'Build_MinerMk1_C',
         displayName: 'Constructor',
-        recipeName: 'Iron Plate',
-        recipeId: 'Recipe_IronPlate_C',
         outputs: rates({ Desc_IronPlate_C: 60 }),
-        powerConsumption: 4,
+        powerConsumption: 0,
       }),
       building('B', {
         displayName: 'Assembler',
-        recipeName: 'Reinforced Iron Plate',
-        recipeId: 'Recipe_ReinforcedIronPlate_C',
+        recipeName: 'Iron Plate',
+        recipeId: 'Recipe_IronPlate_C',
         inputs: rates({ Desc_IronPlate_C: 90 }),
+        outputs: rates({ Desc_IronPlate_C: 30 }),
         powerConsumption: 15,
       }),
     ],
@@ -64,30 +64,6 @@ const testModel = (): NormalizedSave =>
       ratio: 1,
       unmodeledTypes: [],
     },
-    findings: [
-      {
-        id: 'line:line-1:deficit:Desc_IronPlate_C',
-        severity: 'critical',
-        kind: 'line_deficit',
-        message:
-          'Iron Plate shortfall in Iron Plate line: supply 60 items/min, demand 90 items/min.',
-        lineId: 'line-1',
-        buildingIds: ['A', 'B'],
-        itemId: 'Desc_IronPlate_C',
-        required: 90,
-        available: 60,
-        unit: 'items/min',
-      },
-      {
-        id: 'power:deficit',
-        severity: 'critical',
-        kind: 'power_deficit',
-        message: 'Power deficit: 19 MW demand, 0 MW modeled generation.',
-        required: 19,
-        available: 0,
-        unit: 'MW',
-      },
-    ],
   });
 
 const createRepository = (
@@ -148,7 +124,8 @@ describe('PlannerPage', () => {
     expect(await screen.findByRole('heading', { name: 'factory.sav' })).toBeInTheDocument();
     expect(screen.getAllByText('2 / 2')).toHaveLength(2);
     expect(screen.getByText('Game data 1.2')).toBeInTheDocument();
-    expect(screen.getByText('2 critical')).toBeInTheDocument();
+    expect(screen.getByText('1 critical')).toBeInTheDocument();
+    expect(screen.getByText('2 warning')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Import another save' })).toBeInTheDocument();
   });
 
@@ -161,12 +138,12 @@ describe('PlannerPage', () => {
     await userEvent.click(findingsTab);
 
     expect(
-      screen.getByText(/Iron Plate shortfall in Iron Plate line/),
+      screen.getByText(/Iron Plate production shortfall in/),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'A' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'B' })[0]);
     expect(screen.getByText('Recipe')).toBeInTheDocument();
     expect(screen.getAllByText('Iron Plate').length).toBeGreaterThan(0);
-    expect(screen.getByText('60 items/min')).toBeInTheDocument();
+    expect(screen.getByText(/90 expected/)).toBeInTheDocument();
   });
 
   it('shows an actionable parse error', async () => {
@@ -234,7 +211,7 @@ describe('PlannerPage', () => {
     renderPage(async () => testModel());
     await upload();
     await screen.findByRole('heading', { name: 'factory.sav' });
-    await userEvent.click(screen.getByRole('button', { name: 'View all 2' }));
+    await userEvent.click(screen.getByRole('button', { name: 'View all 3' }));
     expect(screen.getByRole('heading', { name: 'Estimated findings' })).toBeInTheDocument();
   });
 

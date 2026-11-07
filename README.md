@@ -56,6 +56,10 @@ and no upload.
   They can be exported/imported as JSON and compared as A/B diffs.
 - **Unknown content:** modded or unknown production buildings are imported and shown as
   unmodeled. They are excluded from rate math and listed in the coverage card.
+- **Supply model:** each line is derived into typed source/transformer/control/transport nodes with
+  expected (configured) and actual (supply-limited) rates. The actual solve is a single forward
+  pass; downstream demand/backpressure is not modeled yet. Transport runs are compressed belt/pipe
+  paths, and storage is treated as a pass-through control in v1.
 - **Limits:** parsing is currently capped at 50 MB. Parse memory is much larger than the file
   (a 5.7 MB public save used roughly 0.8 GB RSS in the spike), so very large saves can still be
   slow or fail. Belt/pipe capacity is not resolved, so physical capacity findings are omitted

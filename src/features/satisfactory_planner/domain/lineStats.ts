@@ -1,7 +1,13 @@
 import type { NormalizedSave, ProductionLine } from './types';
 
+export interface LineStatsLine {
+  id: string;
+  name: string;
+  buildingIds: string[];
+}
+
 export interface LineStats {
-  activeLines: ProductionLine[];
+  activeLines: LineStatsLine[];
   buildingsInLines: number;
   totalModeled: number;
   totalCandidates: number;

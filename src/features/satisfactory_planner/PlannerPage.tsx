@@ -19,6 +19,7 @@ import { FindingsPanel } from './components/FindingsPanel';
 import { BuildingDetails } from './components/BuildingDetails';
 import { CheckpointList } from './components/CheckpointList';
 import { PlannerInfo } from './components/PlannerInfo';
+import { analyzeModel } from './domain/analyzeModel';
 import { getLineStats } from './domain/lineStats';
 import { usePlannerColors } from './theme';
 import { usePlannerView } from './plannerView';
@@ -53,16 +54,23 @@ export const PlannerPage = ({
   const importStartedRef = useRef(false);
   const colors = usePlannerColors();
   const { view } = usePlannerView();
-  const lineStats = useMemo(() => (model ? getLineStats(model) : undefined), [model]);
+  const analysis = useMemo(() => (model ? analyzeModel(model) : undefined), [model]);
+  const lineStats = analysis?.lineStats;
+  const displayLines = analysis?.supplyLines.filter((line) => line.buildingIds.length > 1) ?? [];
 
   const buildingsById = useMemo(
     () => new Map((model?.buildings ?? []).map((building) => [building.id, building])),
     [model],
   );
 
-  const selectedLine = model?.lines.find((line) => line.id === selectedLineId);
+  const selectedLine = analysis?.supplyLines.find((line) => line.id === selectedLineId);
   const selectedBuilding = selectedBuildingId
     ? buildingsById.get(selectedBuildingId)
+    : undefined;
+  const selectedSupplyNode = selectedBuildingId
+    ? analysis?.supplyLines
+        .flatMap((line) => Object.values(line.nodes))
+        .find((node) => node.id === selectedBuildingId)
     : undefined;
 
   const loadModel = (next: NormalizedSave, file: File | null) => {
@@ -237,25 +245,25 @@ export const PlannerPage = ({
             }}
           >
             <Tab value="overview" label="Overview" />
-            <Tab value="lines" label={`Lines (${lineStats?.activeLines.length ?? 0})`} />
-            <Tab value="findings" label={`Findings (${model.findings.length})`} />
+            <Tab value="lines" label={`Lines (${displayLines.length})`} />
+            <Tab value="findings" label={`Findings (${analysis?.findings.length ?? 0})`} />
             <Tab value="checkpoints" label="Checkpoints" />
           </Tabs>
 
           <Box sx={{ pt: 3 }}>
             {tab === 'overview' && (
               <>
-                <PlannerSummary model={model} />
-                {model.findings.length > 0 && (
+                <PlannerSummary model={model} analysis={analysis!} />
+                {(analysis?.findings.length ?? 0) > 0 && (
                   <Card sx={{ mt: 2 }}>
                     <CardContent>
                       <Box className="planner-section-head">
                         <Typography variant="h5" component="h2">Top estimated problems</Typography>
                         <Button variant="text" size="small" onClick={() => setTab('findings')}>
-                          View all {model.findings.length}
+                          View all {analysis?.findings.length ?? 0}
                         </Button>
                       </Box>
-                      <FindingsPanel findings={model.findings.slice(0, 5)} />
+                      <FindingsPanel findings={analysis?.findings.slice(0, 5) ?? []} />
                     </CardContent>
                   </Card>
                 )}
@@ -282,8 +290,8 @@ export const PlannerPage = ({
                       buildings in lines
                     </Typography>
                     <LineList
-                      lines={lineStats?.activeLines ?? []}
-                      findings={model.findings}
+                      lines={displayLines}
+                      findings={analysis?.findings ?? []}
                       selectedLineId={selectedLineId}
                       onSelect={selectLine}
                     />
@@ -299,9 +307,7 @@ export const PlannerPage = ({
                   >
                     <LineGraph
                       line={selectedLine}
-                      buildings={buildingsById}
-                      splitters={model.splitters ?? []}
-                      findings={model.findings}
+                      findings={analysis?.findings ?? []}
                       selectedBuildingId={selectedBuildingId}
                       onSelectBuilding={setSelectedBuildingId}
                     />
@@ -309,6 +315,7 @@ export const PlannerPage = ({
                   <Box sx={{ mt: 2 }}>
                     <BuildingDetails
                       building={selectedBuilding}
+                      supplyNode={selectedSupplyNode}
                       onClose={() => setSelectedBuildingId(undefined)}
                     />
                   </Box>
@@ -332,13 +339,14 @@ export const PlannerPage = ({
                       measured throughput.
                     </Typography>
                     <FindingsPanel
-                      findings={model.findings}
+                      findings={analysis?.findings ?? []}
                       onSelectBuilding={setSelectedBuildingId}
                     />
                   </CardContent>
                 </Card>
                 <BuildingDetails
                   building={selectedBuilding}
+                  supplyNode={selectedSupplyNode}
                   onClose={() => setSelectedBuildingId(undefined)}
                 />
               </Box>
