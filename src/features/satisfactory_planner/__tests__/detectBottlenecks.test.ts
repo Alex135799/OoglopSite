@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { detectBottlenecks, summarizeFindings } from '../domain/detectBottlenecks';
 import { gameData } from '../api/gameData';
 import { building, line, model } from './helpers';
-import type { Finding } from '../domain/types';
+import type { Finding, SupplyLineModel } from '../domain/types';
 
 const power = (generation: number, consumption: number) => ({
   generation,
@@ -134,6 +134,48 @@ describe('detectBottlenecks', () => {
       buildingIds: ['A', 'B'],
     });
     expect(missing[0].message).toContain('2 × Mod Machine');
+  });
+
+  it('reports a splitter bottleneck as a warning finding', () => {
+    const supplyLine: SupplyLineModel = {
+      id: 'line-1',
+      name: 'Iron line',
+      roots: [],
+      nodes: {},
+      summary: {
+        inputs: [],
+        outputs: [],
+        power: {
+          expectedConsumption: 0,
+          actualConsumption: 0,
+          expectedGeneration: 0,
+          actualGeneration: 0,
+        },
+        bottlenecks: [
+          {
+            nodeId: 'Persistent_Level:PersistentLevel.Splitter1',
+            itemId: 'Desc_OreIron_C',
+            expectedRate: 60,
+            actualRate: 50,
+            reason: 'Splitter output belts limit flow',
+          },
+        ],
+      },
+      notes: [],
+      buildingIds: [],
+      transportNodeIds: [],
+    };
+    const findings = detectBottlenecks(model({ power: power(0, 0) }), gameData, [supplyLine]);
+    expect(findings.find((finding) => finding.kind === 'splitter_bottleneck')).toMatchObject({
+      severity: 'warning',
+      lineId: 'line-1',
+      itemId: 'Desc_OreIron_C',
+      required: 60,
+      available: 50,
+      unit: 'items/min',
+    });
+    expect(findings[0].message).toContain('limited by its output belts');
+    expect(findings[0].message).toContain('50 of 60 items/min');
   });
 
   it('summarizes findings by severity', () => {

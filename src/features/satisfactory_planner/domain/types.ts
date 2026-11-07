@@ -72,6 +72,7 @@ export type FindingKind =
   | 'line_surplus'
   | 'belt_over_capacity'
   | 'pipe_over_capacity'
+  | 'splitter_bottleneck'
   | 'missing_recipe'
   | 'unmodeled';
 
@@ -167,6 +168,7 @@ export interface SupplyOutputPort {
   actualRate: number;
   unknown?: boolean;
   nextNodeId?: string;
+  nextNodeIds?: string[];
   notes?: string[];
 }
 
@@ -212,6 +214,7 @@ export interface SupplyControlNode extends SupplyNodeBase {
   outputs: SupplyOutputPort[];
   expectedThroughput: number;
   actualThroughput: number;
+  bottleneck?: boolean;
   buffered?: boolean;
 }
 

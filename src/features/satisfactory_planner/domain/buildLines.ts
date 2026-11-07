@@ -12,17 +12,23 @@ interface Contribution {
 
 const EPSILON = 1e-6;
 
+interface RateGroup {
+  itemId: string;
+  contributions: Contribution[];
+}
+
 const groupRates = (
   buildings: Building[],
   selector: (building: Building) => ItemRate[],
-): Map<string, Contribution[]> => {
-  const grouped = new Map<string, Contribution[]>();
+): Map<string, RateGroup> => {
+  const grouped = new Map<string, RateGroup>();
   for (const building of buildings) {
     for (const rate of selector(building)) {
       if (rate.rate <= EPSILON) continue;
-      const list = grouped.get(rate.itemId) ?? [];
-      list.push({ buildingId: building.id, rate: rate.rate });
-      grouped.set(rate.itemId, list);
+      const key = `${building.physicalGroup ?? `solo:${building.id}`}\u0000${rate.itemId}`;
+      const group = grouped.get(key) ?? { itemId: rate.itemId, contributions: [] };
+      group.contributions.push({ buildingId: building.id, rate: rate.rate });
+      grouped.set(key, group);
     }
   }
   return grouped;
@@ -64,14 +70,16 @@ const allocateFlows = (buildings: Building[]): LineFlow[] => {
   const demand = groupRates(buildings, (building) => building.inputs);
   const flows: LineFlow[] = [];
 
-  for (const itemId of [...supply.keys()].sort()) {
-    const consumers = demand.get(itemId);
-    if (!consumers || consumers.length === 0) continue;
+  for (const key of [...supply.keys()].sort()) {
+    const supplyGroup = supply.get(key)!;
+    const demandGroup = demand.get(key);
+    if (!demandGroup || demandGroup.contributions.length === 0) continue;
+    const itemId = supplyGroup.itemId;
 
-    const producers = [...supply.get(itemId)!].sort((a, b) =>
+    const producers = [...supplyGroup.contributions].sort((a, b) =>
       a.buildingId.localeCompare(b.buildingId),
     );
-    const sinks = [...consumers].sort((a, b) => a.buildingId.localeCompare(b.buildingId));
+    const sinks = [...demandGroup.contributions].sort((a, b) => a.buildingId.localeCompare(b.buildingId));
     const totalSupply = producers.reduce((total, entry) => total + entry.rate, 0);
     const totalDemand = sinks.reduce((total, entry) => total + entry.rate, 0);
     const supplyScale = totalSupply > totalDemand ? totalDemand / totalSupply : 1;

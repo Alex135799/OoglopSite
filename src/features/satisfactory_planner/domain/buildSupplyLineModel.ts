@@ -14,7 +14,7 @@ import type {
   SupplyTransportNode,
   TransportRun,
 } from './types';
-import { round } from './rateMath';
+import { allocateCappedOutputs, round } from './rateMath';
 
 export interface AssignedTransportNodes {
   transportNodes: SplitterNode[];
@@ -252,6 +252,7 @@ export const buildSupplyLineModel = (
     assigned.transportRuns.map((run) => `${run.fromNodeId}\u0000${run.toNodeId}`),
   );
   const drafts: EdgeDraft[] = [];
+  const draftKeys = new Set<string>();
 
   const addDraft = (
     fromId: string,
@@ -263,6 +264,9 @@ export const buildSupplyLineModel = (
     const to = nodes[toId];
     if (!from || !to || fromId === toId) return;
     const itemId = inferEdgeItem(from, to, explicitItem, line.flows);
+    const key = `${fromId}\u0000${toId}\u0000${itemId}`;
+    if (draftKeys.has(key)) return;
+    draftKeys.add(key);
     const unknown = itemId === 'unknown' || (from as MutableNode).notes?.some((note) => note.includes('unknown')) === true;
     drafts.push({
       from: fromId,
@@ -291,13 +295,16 @@ export const buildSupplyLineModel = (
   }
 
   for (const transport of assigned.transportNodes) {
+    const control = nodes[transport.id];
+    const itemId =
+      control?.type === 'control' ? control.itemId ?? transport.itemId : transport.itemId;
     for (const input of transport.directInputs ?? transport.inputs) {
       if (runPairs.has(`${input}\u0000${transport.id}`)) continue;
-      addDraft(input, transport.id, transport.itemId);
+      addDraft(input, transport.id, itemId);
     }
     for (const output of transport.directOutputs ?? transport.outputs) {
       if (runPairs.has(`${transport.id}\u0000${output}`)) continue;
-      addDraft(transport.id, output, transport.itemId);
+      addDraft(transport.id, output, itemId);
     }
   }
 
@@ -344,11 +351,9 @@ export const buildSupplyLineModel = (
     const node = nodes[nodeId] as MutableNode;
     if (!node.outputs) return undefined;
     if (node.type === 'source' || node.type === 'transformer') {
-      const existing = node.outputs.find(
-        (port) => port.itemId === itemId && !port.nextNodeId,
-      );
+      const existing = node.outputs.find((port) => port.itemId === itemId);
       if (existing) {
-        existing.actualRate = actual;
+        if (actual > existing.actualRate) existing.actualRate = actual;
         if (unknown) existing.unknown = true;
         return existing;
       }
@@ -399,7 +404,11 @@ export const buildSupplyLineModel = (
     );
     const inPort = addInputPort(draft.to, draft.itemId, expected, draft.actualRate, draft.unknown);
     if (outPort && inPort) {
-      outPort.nextNodeId = draft.to;
+      const nextNodeIds = new Set(outPort.nextNodeIds ?? []);
+      if (outPort.nextNodeId) nextNodeIds.add(outPort.nextNodeId);
+      nextNodeIds.add(draft.to);
+      outPort.nextNodeIds = [...nextNodeIds];
+      outPort.nextNodeId = outPort.nextNodeId ?? draft.to;
       inPort.previousNodeId = draft.from;
       draft.fromPort = outPort;
       draft.toPort = inPort;
@@ -475,17 +484,42 @@ export const buildSupplyLineModel = (
 
     if (node.type === 'control') {
       const expected = inEdges.reduce((sum, edge) => sum + edge.expectedRate, 0);
-      const equal = outEdges.length > 0 ? inputActual / outEdges.length : 0;
       node.expectedThroughput = round(expected);
       node.actualThroughput = round(inputActual);
-      for (const edge of outEdges) {
-        edge.actualRate = unknownInput ? 0 : equal;
-        if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
-        if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
-        if (unknownInput) setEdgeUnknown(edge);
-      }
-      if (node.kind === 'storage') {
-        node.notes = [...(node.notes ?? []), 'Storage is treated as pass-through; contents are not modeled.'];
+      if (node.kind === 'splitter') {
+        const capacities = outEdges.map((edge) => {
+          const target = nodes[edge.to];
+          return target?.type === 'transport' ? target.capacity : undefined;
+        });
+        const allocation = unknownInput
+          ? { rates: outEdges.map(() => 0), delivered: 0, limited: false }
+          : allocateCappedOutputs(inputActual, capacities);
+        outEdges.forEach((edge, index) => {
+          edge.actualRate = allocation.rates[index] ?? 0;
+          if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+          if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+          if (unknownInput) setEdgeUnknown(edge);
+        });
+        node.bottleneck = !unknownInput && allocation.limited;
+        if (node.bottleneck) {
+          const itemId = node.itemId ?? outEdges[0]?.itemId ?? 'unknown';
+          const unit = unitFor(data, itemId);
+          node.notes = [
+            ...(node.notes ?? []),
+            `Output belts limit throughput: input ${round(inputActual)} ${unit}, delivered ${round(allocation.delivered)} ${unit}.`,
+          ];
+        }
+      } else {
+        const equal = outEdges.length > 0 ? inputActual / outEdges.length : 0;
+        for (const edge of outEdges) {
+          edge.actualRate = unknownInput ? 0 : equal;
+          if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+          if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+          if (unknownInput) setEdgeUnknown(edge);
+        }
+        if (node.kind === 'storage') {
+          node.notes = [...(node.notes ?? []), 'Storage is treated as pass-through; contents are not modeled.'];
+        }
       }
       continue;
     }
@@ -582,7 +616,9 @@ export const buildSupplyLineModel = (
       summaryInputs.set(port.itemId, entry);
     }
     for (const port of node.outputs ?? []) {
-      if (port.nextNodeId && nodes[port.nextNodeId]) continue;
+      const hasNext =
+        (port.nextNodeIds?.length ?? 0) > 0 || Boolean(port.nextNodeId && nodes[port.nextNodeId]);
+      if (hasNext) continue;
       const entry = summaryOutputs.get(port.itemId) ?? { expected: 0, actual: 0, unknown: false };
       entry.expected += port.expectedRate;
       entry.actual += port.actualRate;
@@ -603,6 +639,9 @@ export const buildSupplyLineModel = (
         ...(entry.unknown ? { unknown: true } : {}),
       }))
       .sort((a, b) => a.itemId.localeCompare(b.itemId));
+
+  const inputActualFor = (id: string): number =>
+    (incoming.get(id) ?? []).reduce((sum, edge) => sum + edge.actualRate, 0);
 
   const bottlenecks = Object.values(nodes).flatMap((node) => {
     if (node.type === 'transformer') {
@@ -626,6 +665,20 @@ export const buildSupplyLineModel = (
           expectedRate: node.expectedRate,
           actualRate: node.actualRate,
           reason: 'Transport capacity or item is unknown',
+        },
+      ];
+    }
+    if (node.type === 'control' && node.kind === 'splitter' && node.bottleneck) {
+      const outEdges = outgoing.get(node.id) ?? [];
+      const delivered = outEdges.reduce((sum, edge) => sum + edge.actualRate, 0);
+      const itemId = node.itemId ?? outEdges[0]?.itemId;
+      return [
+        {
+          nodeId: node.id,
+          ...(itemId ? { itemId } : {}),
+          expectedRate: round(inputActualFor(node.id)),
+          actualRate: round(delivered),
+          reason: 'Splitter output belts limit flow',
         },
       ];
     }

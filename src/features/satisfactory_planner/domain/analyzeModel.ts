@@ -40,13 +40,18 @@ export const analyzeModel = (
     )[0]?.[0];
   };
 
+  const transportLine = new Map<string, string>();
   for (const transport of model.transportNodes ?? []) {
     const lineId = chooseLine([...transport.inputs, ...transport.outputs]);
     if (!lineId) continue;
+    transportLine.set(transport.id, lineId);
     ensure(lineId).transportNodes.push(transport);
   }
   for (const run of model.transportRuns ?? []) {
-    const lineId = chooseLine([run.fromNodeId, run.toNodeId]);
+    const lineId =
+      chooseLine([run.fromNodeId, run.toNodeId]) ??
+      transportLine.get(run.fromNodeId) ??
+      transportLine.get(run.toNodeId);
     if (!lineId) continue;
     ensure(lineId).transportRuns.push(run);
   }

@@ -20,6 +20,7 @@ export const building = (
   powerConsumption: 0,
   powerGeneration: 0,
   modeled: true,
+  physicalGroup: 'test-group',
   ...overrides,
 });
 

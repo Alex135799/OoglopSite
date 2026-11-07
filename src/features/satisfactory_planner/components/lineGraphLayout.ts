@@ -10,10 +10,10 @@ import type {
 export const NODE_WIDTH = 220;
 export const NODE_HEIGHT = 86;
 export const CONTROL_SIZE = 44;
-export const STACK_GAP = 16;
-export const CONTROL_GAP = 24;
-export const COLUMN_GAP = 18;
-export const SLOT_PITCH = 64;
+export const STACK_GAP = 44;
+export const CONTROL_GAP = 72;
+export const COLUMN_GAP = 44;
+export const SLOT_PITCH = 116;
 
 export interface GraphEdge {
   id: string;
@@ -23,11 +23,16 @@ export interface GraphEdge {
   expectedRate: number;
   actualRate: number;
   unknown: boolean;
+  transportNodeIds: string[];
+  beltActualRate?: number;
+  beltCapacity?: number;
+  transportCount: number;
 }
 
 export interface MachineAttachment {
   controlId: string;
   machineId: string;
+  connectedPorts: Array<{ machineId: string; fraction: number }>;
   stackId: string;
   side: 'left' | 'right';
   portOrder: number;
@@ -71,34 +76,66 @@ export const collapseTransport = (line: SupplyLineModel): GraphEdge[] => {
   for (const node of Object.values(line.nodes)) {
     if (node.type === 'transport') continue;
     for (const port of node.outputs ?? []) {
-      let nextId = port.nextNodeId;
-      let guard = 0;
-      while (nextId && line.nodes[nextId]?.type === 'transport' && guard < 20) {
-        const transport = line.nodes[nextId];
-        if (transport.type !== 'transport') break;
-        nextId = transport.outputs?.[0]?.nextNodeId;
-        guard += 1;
+      const starts = port.nextNodeIds ?? (port.nextNodeId ? [port.nextNodeId] : []);
+      for (const startId of starts) {
+        let nextId: string | undefined = startId;
+        let guard = 0;
+        const transportedIds: string[] = [];
+        const capacities: number[] = [];
+        const transportedActuals: number[] = [];
+        while (nextId && line.nodes[nextId]?.type === 'transport' && guard < 20) {
+          const transport = line.nodes[nextId] as SupplyNode;
+          if (transport.type !== 'transport') break;
+          transportedIds.push(transport.id);
+          if (transport.capacity !== undefined) capacities.push(transport.capacity);
+          transportedActuals.push(transport.actualRate);
+          const nextPort = transport.outputs?.[0];
+          nextId = nextPort?.nextNodeId ?? nextPort?.nextNodeIds?.[0];
+          guard += 1;
+        }
+        if (!nextId || nextId === node.id) continue;
+        const target = line.nodes[nextId];
+        if (!target || target.type === 'transport') continue;
+        const key = `${node.id}\u0000${nextId}\u0000${port.itemId}`;
+        const beltActualRate =
+          transportedActuals.length > 0
+            ? Math.min(port.actualRate, ...transportedActuals)
+            : undefined;
+        const beltCapacity =
+          capacities.length > 0 && capacities.length === transportedIds.length
+            ? Math.min(...capacities)
+            : undefined;
+        const existing = merged.get(key);
+        if (existing) {
+          existing.expectedRate += port.expectedRate;
+          existing.actualRate += port.actualRate;
+          existing.unknown ||= port.unknown === true;
+          existing.transportNodeIds = [...new Set([...existing.transportNodeIds, ...transportedIds])];
+          existing.transportCount = existing.transportNodeIds.length;
+          if (existing.beltActualRate === undefined) existing.beltActualRate = beltActualRate;
+          else if (beltActualRate !== undefined) {
+            existing.beltActualRate = Math.min(existing.beltActualRate, beltActualRate);
+          }
+          if (existing.beltCapacity === undefined) existing.beltCapacity = beltCapacity;
+          else if (beltCapacity !== undefined) {
+            existing.beltCapacity = Math.min(existing.beltCapacity, beltCapacity);
+          }
+          continue;
+        }
+        merged.set(key, {
+          id: key,
+          from: node.id,
+          to: nextId,
+          itemId: port.itemId,
+          expectedRate: port.expectedRate,
+          actualRate: port.actualRate,
+          unknown: port.unknown === true,
+          transportNodeIds: transportedIds,
+          ...(beltActualRate !== undefined ? { beltActualRate } : {}),
+          ...(beltCapacity !== undefined ? { beltCapacity } : {}),
+          transportCount: transportedIds.length,
+        });
       }
-      if (!nextId || nextId === node.id) continue;
-      const target = line.nodes[nextId];
-      if (!target || target.type === 'transport') continue;
-      const key = `${node.id}\u0000${nextId}\u0000${port.itemId}`;
-      const existing = merged.get(key);
-      if (existing) {
-        existing.expectedRate += port.expectedRate;
-        existing.actualRate += port.actualRate;
-        existing.unknown ||= port.unknown === true;
-        continue;
-      }
-      merged.set(key, {
-        id: key,
-        from: node.id,
-        to: nextId,
-        itemId: port.itemId,
-        expectedRate: port.expectedRate,
-        actualRate: port.actualRate,
-        unknown: port.unknown === true,
-      });
     }
   }
   return [...merged.values()];
@@ -111,6 +148,15 @@ const portOrder = (
 ): number => {
   const index = ports.findIndex((port) => port.itemId === itemId);
   return index < 0 ? 0 : index;
+};
+
+const portFraction = (
+  ports: Array<{ itemId: string }> | undefined,
+  itemId: string,
+): number => {
+  const items = [...new Set((ports ?? []).map((port) => port.itemId))];
+  const index = items.indexOf(itemId);
+  return index < 0 ? 0.5 : (index + 1) / (items.length + 1);
 };
 
 const buildAttachments = (
@@ -155,9 +201,23 @@ const buildAttachments = (
           : []
         : machine.outputs;
     const order = portOrder(machinePorts, chosen.itemId);
+    const connectedPorts = candidates
+      .map((candidate) => {
+        const id = side === 'left' ? candidate.to : candidate.from;
+        const connected = line.nodes[id];
+        const ports =
+          side === 'left' && connected?.type === 'transformer'
+            ? connected.inputs
+            : side === 'right'
+              ? connected?.outputs
+              : undefined;
+        return { machineId: id, fraction: portFraction(ports, candidate.itemId) };
+      })
+      .filter((entry) => visible.has(entry.machineId));
     const attachment: MachineAttachment = {
       controlId: node.id,
       machineId,
+      connectedPorts,
       stackId: stackOf.get(machineId) ?? machineId,
       side,
       portOrder: order,
@@ -199,9 +259,10 @@ export const layoutSupplyGraph = (
     .map((node) => node.id)
     .sort();
   const allNodeIds = new Set(nonTransport);
-  const problemIds = new Set(
-    findings.flatMap((finding) => finding.buildingIds ?? []).filter((id) => allNodeIds.has(id)),
-  );
+  const problemIds = new Set([
+    ...findings.flatMap((finding) => finding.buildingIds ?? []),
+    ...line.summary.bottlenecks.map((entry) => entry.nodeId),
+  ].filter((id) => allNodeIds.has(id)));
   const collapsed = collapseTransport(line);
 
   let keep = new Set(allNodeIds);
@@ -347,7 +408,7 @@ export const layoutSupplyGraph = (
 
   const graph = new dagre.graphlib.Graph();
   graph.setDefaultEdgeLabel(() => ({}));
-  graph.setGraph({ rankdir: 'LR', nodesep: 30, ranksep: 90, marginx: 20, marginy: 20 });
+  graph.setGraph({ rankdir: 'LR', nodesep: 150, ranksep: 320, marginx: 20, marginy: 20 });
   for (const unit of units) graph.setNode(unit.id, { width: unit.width, height: unit.height });
   for (const edge of layoutEdges.values()) graph.setEdge(edge.source, edge.target);
   dagre.layout(graph);
@@ -377,7 +438,21 @@ export const layoutSupplyGraph = (
       const machinePosition = positions.get(attachment.machineId);
       if (!machinePosition) continue;
       const rowHeight = heights.get(attachment.machineId) ?? NODE_HEIGHT;
-      const rowCenter = machinePosition.y + rowHeight / 2;
+      const connectedCenters = attachment.connectedPorts
+        .map((entry) => {
+          const position = positions.get(entry.machineId);
+          if (!position) return undefined;
+          return (
+            position.y +
+            (heights.get(entry.machineId) ?? NODE_HEIGHT) * entry.fraction
+          );
+        })
+        .filter((value): value is number => value !== undefined);
+      const rowCenter =
+        connectedCenters.length > 0
+          ? connectedCenters.reduce((sum, value) => sum + value, 0) /
+            connectedCenters.length
+          : machinePosition.y + rowHeight / 2;
       const x =
         attachment.side === 'left'
           ? machinePosition.x - CONTROL_GAP - CONTROL_SIZE -

@@ -36,6 +36,21 @@ export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetai
   const colors = usePlannerColors();
   const supplyInputs = supplyNode && supplyNode.type !== 'source' ? supplyNode.inputs : [];
   const supplyOutputs = supplyNode?.outputs ?? [];
+  const groupedSupplyOutputs = [...
+    supplyOutputs.reduce((groups, port) => {
+      const entry = groups.get(port.itemId) ?? {
+        itemId: port.itemId,
+        expectedRate: 0,
+        actualRate: 0,
+        unknown: false,
+      };
+      entry.expectedRate += port.expectedRate;
+      entry.actualRate += port.actualRate;
+      entry.unknown ||= port.unknown === true;
+      groups.set(port.itemId, entry);
+      return groups;
+    }, new Map<string, { itemId: string; expectedRate: number; actualRate: number; unknown: boolean }>()),
+  ].map(([, entry]) => entry);
   if (!building) {
     return (
       <Card>
@@ -150,15 +165,15 @@ export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetai
           </>
         )}
 
-        {supplyOutputs.length > 0 && (
+        {groupedSupplyOutputs.length > 0 && (
           <>
             <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
               Outputs
             </Typography>
             <Table size="small" className="planner-rate-table">
               <TableBody>
-                {supplyOutputs.map((output) => (
-                  <TableRow key={output.id}>
+                {groupedSupplyOutputs.map((output) => (
+                  <TableRow key={output.itemId}>
                     <TableCell>{itemName(output.itemId)}</TableCell>
                     <TableCell align="right">
                       {formatNumber(output.expectedRate)} expected ·{' '}

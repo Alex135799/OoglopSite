@@ -103,9 +103,12 @@ inputs to outputs, pipe input/output sides) to find the upstream producers and d
 of each transport node. The node's `StorageInventory` supplies the item currently on it. Direct
 links stop at the next splitter, merger, or production building, so chains such as
 producer → splitter 1 → splitter 2 → consumer are preserved instead of being flattened. The line
-graph renders splitter diamonds as `S` and merger diamonds as `M` between those nodes. Flow is
-propagated through a chain with equal division at each splitter output; smart splitter/merger rules
-and exact rate accounting will be added later.
+graph renders splitter diamonds as `S` and merger diamonds as `M` between those nodes. Splitter flow
+is allocated by capacity-aware water-filling: each output first receives an equal share, an output
+that reaches its downstream belt/pipe capacity is capped, and its unused share is redistributed
+across the remaining outputs. If the outputs still cannot carry the full input, the splitter is
+marked as a bottleneck. Unresolved belt capacities are treated as unconstrained and remain visible
+as unknown transport findings. Smart splitter/merger rules remain out of scope.
 
 ## Supply line model
 
@@ -115,9 +118,9 @@ persisted. Nodes are `source`, `transformer` (`machine`, `generator`, or `sink`)
 expected rate, actual rate, neighbor IDs, and an optional unknown flag.
 
 Expected values are nameplate values at the configured recipe/clock/boost. Actual values come from a
-single forward topological solve: sources push expected output, controls route, transports clamp by
-capacity, transformers reduce output by the worst input ratio, generators use fuel availability, and
-sinks accept arriving flow. Cycles are marked unknown instead of solved. Downstream demand and
+single forward topological solve: sources push expected output, splitter controls allocate by output
+belt capacity, other controls route, transports clamp by capacity, transformers reduce output by the
+worst input ratio, generators use fuel availability, and sinks accept arriving flow. Cycles are marked unknown instead of solved. Downstream demand and
 backpressure are a TODO and are not applied yet. Unknown actual rates are `0` with `unknown: true`.
 
 Transport runs between controls/buildings are compressed from connected belt/pipe owners. Storage
@@ -145,7 +148,9 @@ visible. This is the first layout rule; other manifold/load-balancer rules can b
 
 ## Item-flow allocation
 
-For each item, producer outputs are matched to consumer inputs proportionally. If supply is short,
+For each item, producer outputs are matched to consumer inputs proportionally, but only within the
+same physical connectivity group. A building without a group is treated as its own solo group; this
+prevents disconnected miners from being allocated to distant factories. If supply is short,
 every consumer receives a partial edge instead of filling the first consumer completely; if supply
 is long, every producer gets a partial edge. This keeps deficit/surplus findings representative
 and avoids showing an edge-less machine that still has a recipe input requirement.

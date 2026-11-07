@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allocateCappedOutputs,
   effectiveMultiplier,
   estimatedPower,
   extractorRate,
@@ -30,6 +31,49 @@ describe('rateMath', () => {
   it('applies extractor purity and clock', () => {
     expect(extractorRate(120, 2, 1)).toBe(240);
     expect(extractorRate(120, 0.5, 1.5)).toBe(90);
+  });
+
+  it('splits output rates equally when no belt capacity binds', () => {
+    expect(allocateCappedOutputs(60, [undefined, undefined])).toEqual({
+      rates: [30, 30],
+      delivered: 60,
+      limited: false,
+    });
+  });
+
+  it('redistributes output flow when one belt capacity binds', () => {
+    const result = allocateCappedOutputs(60, [20, 60]);
+    expect(result.rates).toEqual([20, 40]);
+    expect(result.delivered).toBe(60);
+    expect(result.limited).toBe(false);
+  });
+
+  it('reports a limited splitter when every output belt is saturated', () => {
+    const result = allocateCappedOutputs(60, [20, 30]);
+    expect(result.rates).toEqual([20, 30]);
+    expect(result.delivered).toBe(50);
+    expect(result.limited).toBe(true);
+  });
+
+  it('treats unresolved output capacity as unbounded', () => {
+    expect(allocateCappedOutputs(100, [30, 30, undefined])).toEqual({
+      rates: [30, 30, 40],
+      delivered: 100,
+      limited: false,
+    });
+  });
+
+  it('handles zero input and no outputs', () => {
+    expect(allocateCappedOutputs(0, [20, 30])).toEqual({
+      rates: [0, 0],
+      delivered: 0,
+      limited: false,
+    });
+    expect(allocateCappedOutputs(60, [])).toEqual({
+      rates: [],
+      delivered: 0,
+      limited: false,
+    });
   });
 
   it('sums rates, computes percentages and rounds', () => {

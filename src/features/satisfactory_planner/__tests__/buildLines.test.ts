@@ -145,9 +145,18 @@ describe('buildLines', () => {
 
   it('groups unconnected unmodeled buildings into separate unknown lines', () => {
     const lines = buildLines([
-      building('U1', { modeled: false, displayName: 'Idle One' }),
-      building('U2', { modeled: false, displayName: 'Idle Two' }),
+      building('U1', { modeled: false, displayName: 'Idle One', physicalGroup: 'idle-1' }),
+      building('U2', { modeled: false, displayName: 'Idle Two', physicalGroup: 'idle-2' }),
     ]);
     expect(lines.map((line) => line.name)).toEqual(['Idle One (unknown)', 'Idle Two (unknown)']);
+  });
+
+  it('does not allocate flows across physical groups', () => {
+    const lines = buildLines([
+      building('A', { outputs: rates({ Plate: 60 }), physicalGroup: 'factory-a' }),
+      building('B', { inputs: rates({ Plate: 30 }), physicalGroup: 'factory-b' }),
+    ]);
+    expect(lines).toHaveLength(2);
+    expect(lines.every((entry) => entry.flows.length === 0)).toBe(true);
   });
 });

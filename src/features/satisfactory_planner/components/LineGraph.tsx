@@ -29,7 +29,7 @@ import type {
   SupplyNode,
   SupplyOutputPort,
 } from '../domain/types';
-import { formatNumber, itemName } from '../format';
+import { formatNumber } from '../format';
 import { layoutSupplyGraph, type GraphEdge } from './lineGraphLayout';
 import { plannerColors, usePlannerColors, type PlannerModeColors } from '../theme';
 
@@ -38,12 +38,15 @@ interface BuildingNodeData {
   subtitle: string;
   clock: number;
   severity?: Severity;
+  inputItems?: string[];
+  outputItems?: string[];
   [key: string]: unknown;
 }
 
 interface TransportNodeData {
   label: 'S' | 'M' | 'T';
   kind: 'splitter' | 'merger' | 'storage';
+  bottleneck?: boolean;
   [key: string]: unknown;
 }
 
@@ -114,7 +117,27 @@ const BuildingNode = ({ data, selected }: NodeProps) => {
         },
       }}
     >
+      {(node.inputItems ?? []).map((itemId, index, items) => (
+        <Handle
+          key={itemId}
+          id={`in-${itemId}`}
+          type="target"
+          position={Position.Left}
+          isConnectable={false}
+          style={{ top: `${((index + 1) / (items.length + 1)) * 100}%` }}
+        />
+      ))}
       <Handle type="target" position={Position.Left} isConnectable={false} />
+      {(node.outputItems ?? []).map((itemId, index, items) => (
+        <Handle
+          key={itemId}
+          id={`out-${itemId}`}
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+          style={{ top: `${((index + 1) / (items.length + 1)) * 100}%` }}
+        />
+      ))}
       <Handle type="source" position={Position.Right} isConnectable={false} />
       <strong>{node.label}</strong>
       <Box component="span" className="planner-graph-meta">{node.subtitle}</Box>
@@ -130,13 +153,13 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
   const modeColors = usePlannerColors();
   return (
     <Box
-      aria-label={
+      aria-label={`${
         transport.kind === 'merger'
           ? 'Merger'
           : transport.kind === 'storage'
             ? 'Storage'
             : 'Splitter'
-      }
+      }${transport.bottleneck ? ' (bottleneck)' : ''}`}
       sx={{
         position: 'relative',
         display: 'flex',
@@ -154,12 +177,16 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
           inset: 0,
           transform: 'rotate(45deg)',
           border: '2px solid',
-          borderColor: plannerColors.secondary.color,
+          borderColor: transport.bottleneck
+            ? plannerColors.warning.color
+            : plannerColors.secondary.color,
           borderRadius: '4px',
           bgcolor: modeColors.surface,
           boxShadow: selected
             ? `0 0 0 3px ${plannerColors.primary.color}`
-            : `0 1px 3px ${modeColors.shadowStrong}`,
+            : transport.bottleneck
+              ? `0 0 0 2px ${plannerColors.warning.color}`
+              : `0 1px 3px ${modeColors.shadowStrong}`,
         }}
       />
       <Box component="span" sx={{ position: 'relative', color: modeColors.textPrimary }}>
@@ -177,9 +204,17 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
 
 const nodeTypes = { building: BuildingNode, transport: TransportNodeShape };
 
+interface GraphObstacle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface LaneEdgeData {
   laneOffset: number;
-  label: string;
+  label?: string;
+  obstacles?: GraphObstacle[];
   [key: string]: unknown;
 }
 
@@ -207,26 +242,68 @@ const LaneEdge = ({
     borderRadius: 8,
     centerX: (sourceX + targetX) / 2 + (lane.laneOffset ?? 0),
   });
+  const labelWidth = Math.max(18, (lane.label?.length ?? 0) * 6.5 + 8);
+  const labelHeight = 18;
+  const labelClearance = 12;
+  const isClear = (x: number, y: number) => {
+    const left = x - labelWidth / 2;
+    const right = x + labelWidth / 2;
+    const top = y - labelHeight / 2;
+    const bottom = y + labelHeight / 2;
+    return !(lane.obstacles ?? []).some(
+      (obstacle) =>
+        right > obstacle.x - labelClearance &&
+        left < obstacle.x + obstacle.width + labelClearance &&
+        bottom > obstacle.y - labelClearance &&
+        top < obstacle.y + obstacle.height + labelClearance,
+    );
+  };
+  const labelPosition = (() => {
+    if (!lane.label) return undefined;
+    if (typeof document === 'undefined') {
+      return isClear(labelX, labelY) ? { x: labelX, y: labelY } : undefined;
+    }
+    const probe = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    probe.setAttribute('d', path);
+    const total = typeof probe.getTotalLength === 'function' ? probe.getTotalLength() : 0;
+    if (!Number.isFinite(total) || total <= 0 || typeof probe.getPointAtLength !== 'function') {
+      return isClear(labelX, labelY) ? { x: labelX, y: labelY } : undefined;
+    }
+    const midpoint = total / 2;
+    const reach = Math.max(0, total / 2 - 12);
+    for (let step = 0; step <= 16; step += 1) {
+      const distance = (step / 16) * reach;
+      const directions = step === 0 ? [0] : [-1, 1];
+      for (const direction of directions) {
+        const point = probe.getPointAtLength(midpoint + direction * distance);
+        if (isClear(point.x, point.y)) return point;
+      }
+    }
+    return undefined;
+  })();
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
-      <EdgeLabelRenderer>
+      {labelPosition ? <EdgeLabelRenderer>
         <Box
           sx={{
             position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            zIndex: 1000,
+            transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)`,
             pointerEvents: 'none',
             bgcolor: modeColors.surface,
             color: modeColors.textSecondary,
+            border: `1px solid ${modeColors.border}`,
             fontSize: 11,
-            px: 0.4,
+            px: 0.5,
+            py: 0.15,
             borderRadius: 0.5,
             whiteSpace: 'nowrap',
           }}
         >
           {lane.label}
         </Box>
-      </EdgeLabelRenderer>
+      </EdgeLabelRenderer> : null}
     </>
   );
 };
@@ -239,7 +316,7 @@ const SPLITTER_SIZE = 44;
 const STACK_GAP = 16;
 const MAX_NODES = 150;
 
-const CHAIN_HORIZONTAL_GAP = 70;
+const CHAIN_HORIZONTAL_GAP = 160;
 const CHAIN_GAP = NODE_HEIGHT + STACK_GAP;
 
 const layoutTransportChains = (
@@ -423,6 +500,12 @@ export const LineGraph = ({
                 : 'Source',
             clock: node.clock,
             severity,
+            ...(node.type === 'transformer' && node.inputs.length > 0
+              ? { inputItems: [...new Set(node.inputs.map((port) => port.itemId))] }
+              : {}),
+            ...((node.type === 'source' || node.type === 'transformer') && node.outputs.length > 0
+              ? { outputItems: [...new Set(node.outputs.map((port) => port.itemId))] }
+              : {}),
           } satisfies BuildingNodeData,
         });
       } else if (node.type === 'control') {
@@ -434,6 +517,7 @@ export const LineGraph = ({
           data: {
             label: node.kind === 'merger' ? 'M' : node.kind === 'storage' ? 'T' : 'S',
             kind: node.kind,
+            ...(node.kind === 'splitter' && node.bottleneck ? { bottleneck: true } : {}),
           } satisfies TransportNodeData,
         });
       }
@@ -510,13 +594,24 @@ export const LineGraph = ({
       laneOffsets.set(edge.id, sourceLane + targetLane + indexInPair * 10);
     }
 
+    const obstacles: GraphObstacle[] = layout.visibleIds.flatMap((id) => {
+      const node = line.nodes[id];
+      const position = layout.positions.get(id);
+      if (!node || !position) return [];
+      const width = node.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH;
+      const height =
+        layout.heights.get(id) ??
+        (node.type === 'control' ? SPLITTER_SIZE : NODE_HEIGHT);
+      return [{ x: position.x, y: position.y, width, height }];
+    });
+
     const graphEdges: Edge[] = visibleEdges.map((edge) => {
       const severity = severityOf(edge.to, findings);
       const color = edgeColor(severity, modeColors);
       const label =
         edge.unknown || edge.itemId === 'unknown'
-          ? 'Unknown · 0/min'
-          : `${itemName(edge.itemId)} ${formatNumber(edge.actualRate)}`;
+          ? undefined
+          : formatNumber(edge.actualRate);
       const sourceNode = line.nodes[edge.from];
       const targetNode = line.nodes[edge.to];
       const sourceControl = sourceNode?.type === 'control';
@@ -531,12 +626,24 @@ export const LineGraph = ({
         (Math.abs(sourcePosition.x - targetPosition.x) < 60 ||
           attachedIds.has(edge.from) ||
           attachedIds.has(edge.to));
+      const sourceOutputHandle =
+        !sourceControl &&
+        (sourceNode?.type === 'source' || sourceNode?.type === 'transformer') &&
+        sourceNode.outputs.some((port) => port.itemId === edge.itemId)
+          ? `out-${edge.itemId}`
+          : undefined;
       const sourceHandle = verticalControl
         ? sourcePosition.y <= targetPosition.y
           ? 'out-bottom'
           : 'out-top'
         : sourceControl
           ? 'out-right'
+          : sourceOutputHandle;
+      const targetInputHandle =
+        !targetControl &&
+        targetNode?.type === 'transformer' &&
+        targetNode.inputs.some((port) => port.itemId === edge.itemId)
+          ? `in-${edge.itemId}`
           : undefined;
       const targetHandle = verticalControl
         ? targetPosition.y >= sourcePosition.y
@@ -544,7 +651,7 @@ export const LineGraph = ({
           : 'in-bottom'
         : targetControl
           ? 'in-left'
-          : undefined;
+          : targetInputHandle;
       return {
         id: edge.id,
         source: edge.from,
@@ -554,7 +661,8 @@ export const LineGraph = ({
         type: 'lane',
         data: {
           laneOffset: laneOffsets.get(edge.id) ?? 0,
-          label,
+          ...(label !== undefined ? { label } : {}),
+          obstacles,
         } satisfies LaneEdgeData,
         markerEnd: { type: MarkerType.ArrowClosed, color },
         style: {
@@ -619,11 +727,12 @@ export const LineGraph = ({
         </Alert>
       )}
 
-      <Box sx={{ height: { xs: 380, md: 480 }, bgcolor: modeColors.surfaceMuted }}>
+      <Box sx={{ height: { xs: 520, md: 720 }, bgcolor: modeColors.surfaceMuted }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodeClick={(_, node) => {
             const supplyNode = line.nodes[node.id];
             if (supplyNode?.type === 'source' || supplyNode?.type === 'transformer') {

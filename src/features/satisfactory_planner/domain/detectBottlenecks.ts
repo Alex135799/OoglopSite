@@ -179,6 +179,27 @@ const supplyLineFindings = (
         buildingIds: unknownTransports.slice(0, 20).map((entry) => entry.nodeId),
       });
     }
+
+    const limitedSplitters = line.summary.bottlenecks.filter(
+      (entry) => entry.reason === 'Splitter output belts limit flow',
+    );
+    for (const entry of limitedSplitters) {
+      const itemId = entry.itemId ?? 'unknown';
+      const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
+      const label = itemId === 'unknown' ? 'flow' : itemLabel(data, itemId);
+      const shortId = entry.nodeId.split('.').pop() ?? entry.nodeId;
+      findings.push({
+        id: `line:${line.id}:splitter-bottleneck:${entry.nodeId}`,
+        severity: 'warning',
+        kind: 'splitter_bottleneck',
+        message: `Splitter ${shortId} in ${line.name} is limited by its output belts: ${label} ${number(entry.actualRate)} of ${number(entry.expectedRate)} ${unit}.`,
+        lineId: line.id,
+        ...(entry.itemId ? { itemId: entry.itemId } : {}),
+        required: entry.expectedRate,
+        available: entry.actualRate,
+        unit,
+      });
+    }
   }
   return findings;
 };

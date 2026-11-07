@@ -10,7 +10,7 @@ import {
   SLOT_PITCH,
   layoutSupplyGraph,
 } from '../components/lineGraphLayout';
-import type { SplitterNode } from '../domain/types';
+import type { ProductionLine, SplitterNode, TransportRun } from '../domain/types';
 import { building, line, model, rates } from './helpers';
 
 const source = (id: string, item: string) =>
@@ -48,20 +48,107 @@ const control = (
   })),
 });
 
-const layout = (buildings: ReturnType<typeof building>[], transportNodes: SplitterNode[]) => {
+const layout = (
+  buildings: ReturnType<typeof building>[],
+  transportNodes: SplitterNode[],
+  transportRuns: TransportRun[] = [],
+  flows: ProductionLine['flows'] = [],
+  problemsOnly = false,
+) => {
   const rawLine = line('line-1', buildings.map((entry) => entry.id), {
     name: 'Line',
-    flows: [],
+    flows,
   });
   const m = model({ buildings, lines: [rawLine] });
   const supply = buildSupplyLineModel(m, rawLine, gameData, {
     transportNodes,
-    transportRuns: [],
+    transportRuns,
   });
-  return layoutSupplyGraph(supply, [], false, 150);
+  return layoutSupplyGraph(supply, [], problemsOnly, 150);
 };
 
 describe('machine-attached control layout', () => {
+  it('keeps every fan-out edge from a source port', () => {
+    const buildings = [
+      source('A', 'One'),
+      machine('B', { One: 30 }),
+      machine('C', { One: 30 }),
+    ];
+    const result = layout(buildings, [], [], [
+      { from: 'A', to: 'B', itemId: 'One', rate: 30 },
+      { from: 'A', to: 'C', itemId: 'One', rate: 30 },
+    ]);
+    expect(result.edges.map((edge) => edge.to).sort()).toEqual(['B', 'C']);
+  });
+
+  it('keeps a bottleneck splitter in the problems-only view', () => {
+    const buildings = [
+      source('A', 'Desc_OreIron_C'),
+      machine('B', { Desc_OreIron_C: 60 }),
+      machine('C', { Desc_OreIron_C: 60 }),
+    ];
+    const splitter: SplitterNode = {
+      ...control('S1', ['A'], ['B', 'C'], 'Desc_OreIron_C'),
+      directOutputs: [],
+      outputRoles: [],
+    };
+    const runs: TransportRun[] = [
+      {
+        id: 'run-B',
+        medium: 'belt',
+        typeId: 'Build_ConveyorBeltMk1_C',
+        fromNodeId: 'S1',
+        toNodeId: 'B',
+        itemId: 'Desc_OreIron_C',
+        capacity: 20,
+        segmentCount: 1,
+        segmentIds: ['belt-B'],
+      },
+      {
+        id: 'run-C',
+        medium: 'belt',
+        typeId: 'Build_ConveyorBeltMk1_C',
+        fromNodeId: 'S1',
+        toNodeId: 'C',
+        itemId: 'Desc_OreIron_C',
+        capacity: 30,
+        segmentCount: 1,
+        segmentIds: ['belt-C'],
+      },
+    ];
+    const result = layout(buildings, [splitter], runs, [], true);
+    expect(result.problemIds.has('S1')).toBe(true);
+    expect(result.visibleIds).toContain('S1');
+  });
+
+  it('keeps collapsed belt capacity metadata on the drawn edge', () => {
+    const buildings = [
+      source('A', 'Desc_OreIron_C'),
+      machine('B', { Desc_OreIron_C: 60 }),
+    ];
+    const run: TransportRun = {
+      id: 'run-1',
+      medium: 'belt',
+      typeId: 'Build_ConveyorBeltMk1_C',
+      fromNodeId: 'A',
+      toNodeId: 'B',
+      itemId: 'Desc_OreIron_C',
+      capacity: 30,
+      segmentCount: 2,
+      segmentIds: ['belt-1', 'belt-2'],
+    };
+    const result = layout(buildings, [], [run]);
+    expect(result.edges).toHaveLength(1);
+    expect(result.edges[0]).toMatchObject({
+      from: 'A',
+      to: 'B',
+      transportNodeIds: ['run-1'],
+      transportCount: 1,
+      beltCapacity: 30,
+      beltActualRate: 30,
+    });
+  });
+
   it('places input controls in recipe order in progressively farther columns', () => {
     const buildings = [source('A', 'One'), source('B', 'Two'), machine('C', { One: 30, Two: 30 })];
     const result = layout(buildings, [
@@ -75,7 +162,9 @@ describe('machine-attached control layout', () => {
     expect(s2.x).toBeLessThan(s1.x);
     expect(s1.x).toBeCloseTo(c.x - CONTROL_GAP - CONTROL_SIZE);
     expect(s2.x).toBeCloseTo(c.x - CONTROL_GAP - CONTROL_SIZE - (CONTROL_SIZE + COLUMN_GAP));
-    expect(s1.y).toBeCloseTo(s2.y);
+    const h = result.heights.get('C')!;
+    expect(s1.y + CONTROL_SIZE / 2).toBeCloseTo(c.y + h / 3);
+    expect(s2.y + CONTROL_SIZE / 2).toBeCloseTo(c.y + (h * 2) / 3);
   });
 
   it('uses vertical slots and expands row height for same-port controls', () => {
@@ -103,8 +192,35 @@ describe('machine-attached control layout', () => {
     const c2 = result.positions.get('C2')!;
     const s1 = result.positions.get('S1')!;
     expect(s1.x).toBeLessThan(c1.x);
-    expect(s1.y).toBeCloseTo(c1.y + (NODE_HEIGHT - CONTROL_SIZE) / 2);
+    const h1 = result.heights.get('C1')!;
+    const h2 = result.heights.get('C2')!;
+    expect(s1.y).toBeCloseTo(
+      (c1.y + h1 / 2 + c2.y + h2 / 2) / 2 - CONTROL_SIZE / 2,
+    );
     expect(result.attachments.find((entry) => entry.controlId === 'S1')?.machineId).toBe('C1');
+  });
+
+  it('aligns a merger with the selected output point of a multi-output machine', () => {
+    const buildings = [
+      building('B', {
+        displayName: 'Multi output',
+        outputs: rates({ One: 30, Two: 30 }),
+      }),
+      machine('D', { Two: 30 }),
+    ];
+    const merger = {
+      ...control('M1', ['B'], ['D'], 'Two'),
+      kind: 'merger' as const,
+      typeId: 'Build_ConveyorAttachmentMerger_C',
+      inputRoles: [{ id: 'B', role: 'sink' as const }],
+      outputRoles: [{ id: 'D', role: 'tap' as const }],
+    };
+    const result = layout(buildings, [merger]);
+    const b = result.positions.get('B')!;
+    const m1 = result.positions.get('M1')!;
+    const h = result.heights.get('B')!;
+    expect(m1.x).toBeGreaterThan(b.x + NODE_WIDTH);
+    expect(m1.y + CONTROL_SIZE / 2).toBeCloseTo(b.y + (h * 2) / 3);
   });
 
   it('places mergers to the right of their source machines', () => {

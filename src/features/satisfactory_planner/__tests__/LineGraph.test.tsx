@@ -5,7 +5,7 @@ import { LineGraph } from '../components/LineGraph';
 import { buildSupplyLineModel } from '../domain/buildSupplyLineModel';
 import { gameData } from '../api/gameData';
 import { building, line, model, rates } from './helpers';
-import type { Finding } from '../domain/types';
+import type { Finding, SupplyLineModel } from '../domain/types';
 
 const buildings = [
   building('A', { displayName: 'Constructor', recipeName: 'Iron Plate', outputs: rates({ Plate: 60 }) }),
@@ -54,6 +54,30 @@ describe('LineGraph', () => {
     expect(screen.getByText('Constructor')).toBeInTheDocument();
     expect(screen.getByText('Assembler')).toBeInTheDocument();
     expect(screen.getByText('Isolated Smelter')).toBeInTheDocument();
+  });
+
+  it('renders a target handle for every building input item', () => {
+    const converter = building('Converter', {
+      displayName: 'Converter',
+      typeId: 'Build_Converter_C',
+      recipeId: 'Recipe_FicsiteIngot_Iron_C',
+      inputs: rates({ Desc_SAMIngot_C: 120, Desc_IronIngot_C: 720 }),
+      outputs: rates({ Desc_FicsiteIngot_C: 30 }),
+    });
+    const converterLine = line('line-converter', ['Converter'], {
+      name: 'Converter line',
+      flows: [],
+    });
+    const { container } = render(
+      <LineGraph
+        line={supply([converter], converterLine)}
+        findings={[]}
+        onSelectBuilding={() => undefined}
+      />,
+    );
+    expect(container.querySelector('[data-handleid="in-Desc_SAMIngot_C"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-handleid="in-Desc_IronIngot_C"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-handleid="out-Desc_FicsiteIngot_C"]')).toBeInTheDocument();
   });
 
   it('filters to problem buildings and their neighbours', async () => {
@@ -150,6 +174,54 @@ describe('LineGraph', () => {
     expect(mergerPosition && producerA && producerB).toBeTruthy();
     expect(mergerPosition!.x).toBeGreaterThan(producerA!.x);
     expect(mergerPosition!.x).toBeGreaterThan(producerB!.x);
+  });
+
+  it('marks a bottleneck splitter with a warning label', () => {
+    const bottleneckLine: SupplyLineModel = {
+      id: 'line-bottleneck',
+      name: 'Bottleneck line',
+      roots: [],
+      nodes: {
+        S1: {
+          id: 'S1',
+          type: 'control',
+          kind: 'splitter',
+          displayName: 'Splitter',
+          itemId: 'Desc_OreIron_C',
+          inputs: [],
+          outputs: [],
+          expectedThroughput: 60,
+          actualThroughput: 50,
+          bottleneck: true,
+        },
+      },
+      summary: {
+        inputs: [],
+        outputs: [],
+        power: {
+          expectedConsumption: 0,
+          actualConsumption: 0,
+          expectedGeneration: 0,
+          actualGeneration: 0,
+        },
+        bottlenecks: [
+          {
+            nodeId: 'S1',
+            itemId: 'Desc_OreIron_C',
+            expectedRate: 60,
+            actualRate: 50,
+            reason: 'Splitter output belts limit flow',
+          },
+        ],
+      },
+      notes: [],
+      buildingIds: [],
+      transportNodeIds: ['S1'],
+    };
+    render(
+      <LineGraph line={bottleneckLine} findings={[]} onSelectBuilding={() => undefined} />,
+    );
+    expect(screen.getByLabelText('Splitter (bottleneck)')).toBeInTheDocument();
   });
 
   it('stacks machines with the same recipe in one column', () => {

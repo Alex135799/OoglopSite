@@ -28,3 +28,41 @@ export const sumRate = (rates: { rate: number }[]): number =>
 
 export const percent = (part: number, whole: number): number =>
   whole === 0 ? 0 : part / whole;
+
+export interface CappedAllocation {
+  rates: number[];
+  delivered: number;
+  limited: boolean;
+}
+
+const ALLOCATION_EPSILON = 1e-9;
+
+export const allocateCappedOutputs = (
+  input: number,
+  caps: (number | undefined)[],
+): CappedAllocation => {
+  const rates = caps.map(() => 0);
+  if (caps.length === 0 || input <= 0) {
+    return { rates, delivered: 0, limited: false };
+  }
+
+  let remaining = input;
+  let active = caps.map((_, index) => index);
+  while (remaining > ALLOCATION_EPSILON && active.length > 0) {
+    const share = remaining / active.length;
+    for (const index of active) {
+      const cap = caps[index];
+      const room = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(0, cap) - rates[index];
+      const added = Math.min(share, room);
+      rates[index] += added;
+      remaining -= added;
+    }
+    active = active.filter((index) => {
+      const cap = caps[index];
+      return cap === undefined || rates[index] + ALLOCATION_EPSILON < cap;
+    });
+  }
+
+  const delivered = rates.reduce((sum, rate) => sum + rate, 0);
+  return { rates, delivered, limited: delivered + 1e-6 < input };
+};
