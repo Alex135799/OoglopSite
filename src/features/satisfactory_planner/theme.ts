@@ -43,6 +43,10 @@ export const plannerColors = {
     color: '#0dcaf0',
     onColor: '#ffffff',
   },
+  somersloop: {
+    color: '#c77dff',
+    glow: 'rgba(199, 125, 255, 0.55)',
+  },
   light: {
     background: '#ffffff',
     onBackground: '#1c1f26',

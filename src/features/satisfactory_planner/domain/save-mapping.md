@@ -55,8 +55,9 @@ through findings and details, but are hidden from the line list.
 | `clock` | `mCurrentPotential`, then `mPendingPotential` | High | Omitted when 1.0. Clamped to >= 0.01. |
 | `boost` | `mCurrentProductionBoost` | High | Float fraction; omitted when 0. |
 | `shards` | stacks in `mInventoryPotential` | High | Counts `Desc_CrystalShard_C` items. |
-| inputs/outputs | dataset recipe | High | `amount / duration * 60 * clock * (1 + boost)`. |
-| power use | dataset machine `basePower` | Medium | `basePower * clock^powerExponent * (1 + boost)^boostPowerExponent`. |
+| inputs | dataset recipe | High | `amount / duration * 60 * clock`. Somersloop boost does not increase inputs. |
+| outputs | dataset recipe | High | `amount / duration * 60 * clock * max(1, boost)`. |
+| power use | dataset machine `basePower` | Medium | `basePower * clock^powerExponent * max(1, boost)^boostPowerExponent`. |
 | variable power | recipe `variablePower` | Medium | For low-base-power machines (Converter, Quantum Encoder, Particle Accelerator), the planner uses the maximum estimate `constant + factor`. |
 
 Power shard slots are not used to infer clock speed: the save stores the actual potential, and a
@@ -117,13 +118,19 @@ persisted. Nodes are `source`, `transformer` (`machine`, `generator`, or `sink`)
 (`splitter`, `merger`, or `storage`), and `transport` (belt or pipe run). Ports carry item,
 expected rate, actual rate, neighbor IDs, and an optional unknown flag.
 
-Expected values are nameplate values at the configured recipe/clock/boost. Actual values come from a
-single forward topological solve: sources push expected output, splitter controls allocate by output
-belt capacity, other controls route, transports clamp by capacity, transformers reduce output by the
-worst input ratio, generators use fuel availability, and sinks accept arriving flow. Cycles are marked unknown instead of solved. Downstream demand and
-backpressure are a TODO and are not applied yet. Unknown actual rates are `0` with `unknown: true`.
+Expected values are nameplate values at the configured recipe/clock/boost. Actual values come from an
+iterative demand/supply solve: a reverse pass computes how much each edge can accept from downstream
+machines and controls, then a forward pass routes supply through those demand caps. Splitters
+water-fill output branches by `min(belt capacity, downstream demand)`, so a backpressured branch's
+share is redistributed to branches that can still accept it. Transformers reduce output by the worst
+available input ratio, and a demand-limited transformer is distinguished from an input-starved one.
+Line-boundary outputs have unlimited demand; storage is pass-through. Cycles are marked unknown
+instead of solved. Unknown actual rates are `0` with `unknown: true`.
 
-Transport runs between controls/buildings are compressed from connected belt/pipe owners. Storage
+Transport runs between controls/buildings are compressed from connected belt/pipe owners. Belts and
+pipes have only an actual rate and a capacity, not an expected rate, so they are never marked as
+bottlenecks. A run operating at its capacity is colored blue in the graph as a possible constraint;
+the upstream splitter or downstream building decides whether that is actually a bottleneck. Storage
 is a control subtype and is pass-through in v1; inventory contents are not modeled. Each
 control/transport run belongs to one line, assigned by the greatest overlap with that line's
 production buildings.

@@ -127,7 +127,21 @@ describe('buildSupplyLineModel', () => {
     expect(result.nodes.C).toMatchObject({ type: 'transformer', actualPower: 4 });
   });
 
-  const splitterWithRuns = (capacities: [number | undefined, number | undefined]) => {
+  const splitterWithRuns = (
+    capacities: [number | undefined, number | undefined],
+    cInput = 30,
+  ) => {
+    const c = cInput === 30
+      ? secondSmelter
+      : building('C', {
+          typeId: 'Build_SmelterMk1_C',
+          displayName: 'Smelter',
+          recipeId: 'Recipe_IngotIron_C',
+          recipeName: 'Iron Ingot',
+          inputs: rates({ Desc_OreIron_C: cInput }),
+          outputs: rates({ Desc_IronIngot_C: cInput / 2 }),
+          powerConsumption: 4,
+        });
     const runs: TransportRun[] = [
       {
         id: 'run-B',
@@ -153,7 +167,7 @@ describe('buildSupplyLineModel', () => {
       },
     ];
     const splitModel = model({
-      buildings: [source, smelter, secondSmelter],
+      buildings: [source, smelter, c],
       lines: [line('line-1', ['A', 'B', 'C'], { name: 'Split line', flows: [] })],
     });
     return buildSupplyLineModel(splitModel, splitModel.lines[0], gameData, {
@@ -278,7 +292,7 @@ describe('buildSupplyLineModel', () => {
   });
 
   it('redistributes splitter flow when one output belt is slower', () => {
-    const result = splitterWithRuns([20, 60]);
+    const result = splitterWithRuns([20, 60], 60);
     expect(result.nodes['run-B']).toMatchObject({ type: 'transport', actualRate: 20 });
     expect(result.nodes['run-C']).toMatchObject({ type: 'transport', actualRate: 40 });
     expect(result.nodes.S1).toMatchObject({ type: 'control', bottleneck: false });
@@ -303,6 +317,177 @@ describe('buildSupplyLineModel', () => {
         expectedRate: 60,
         actualRate: 50,
         reason: 'Splitter output belts limit flow',
+      }),
+    );
+  });
+
+  it('does not report a demand-limited transformer as input-starved', () => {
+    const a = building('A', { typeId: 'Build_MinerMk1_C', outputs: rates({ Desc_OreIron_C: 60 }) });
+    const b = building('B', {
+      typeId: 'Build_SmelterMk1_C',
+      recipeId: 'Recipe_IngotIron_C',
+      inputs: rates({ Desc_OreIron_C: 30 }),
+      outputs: rates({ Desc_IronIngot_C: 30 }),
+    });
+    const c = building('C', {
+      typeId: 'Build_ConstructorMk1_C',
+      recipeId: 'Recipe_IronPlate_C',
+      inputs: rates({ Desc_IronIngot_C: 15 }),
+      outputs: rates({ Desc_IronPlate_C: 10 }),
+    });
+    const demandModel = model({
+      buildings: [a, b, c],
+      lines: [
+        line('line-1', ['A', 'B', 'C'], {
+          name: 'Demand-limited line',
+          flows: [
+            { from: 'A', to: 'B', itemId: 'Desc_OreIron_C', rate: 30 },
+            { from: 'B', to: 'C', itemId: 'Desc_IronIngot_C', rate: 15 },
+          ],
+        }),
+      ],
+    });
+    const result = buildSupplyLineModel(demandModel, demandModel.lines[0], gameData, {
+      transportNodes: [],
+      transportRuns: [],
+    });
+    expect(result.nodes.B).toMatchObject({
+      type: 'transformer',
+      limitedBy: 'demand',
+    });
+    expect(result.summary.bottlenecks).not.toContainEqual(
+      expect.objectContaining({ nodeId: 'B', reason: 'Transformer input starvation' }),
+    );
+  });
+
+  it('scales every input demand when a multi-input machine is supply-limited', () => {
+    const ore = building('Ore', { typeId: 'Build_MinerMk1_C', outputs: rates({ Desc_OreIron_C: 30 }) });
+    const water = building('Water', { typeId: 'Build_WaterPump_C', outputs: rates({ Desc_Water_C: 60 }) });
+    const machine = building('Machine', {
+      typeId: 'Build_Converter_C',
+      recipeId: 'Recipe_Test_C',
+      inputs: rates({ Desc_OreIron_C: 60, Desc_Water_C: 60 }),
+      outputs: rates({ Desc_Product_C: 30 }),
+    });
+    const demandModel = model({
+      buildings: [ore, water, machine],
+      lines: [
+        line('line-1', ['Ore', 'Water', 'Machine'], {
+          name: 'Multi-input line',
+          flows: [
+            { from: 'Ore', to: 'Machine', itemId: 'Desc_OreIron_C', rate: 30 },
+            { from: 'Water', to: 'Machine', itemId: 'Desc_Water_C', rate: 60 },
+          ],
+        }),
+      ],
+    });
+    const result = buildSupplyLineModel(demandModel, demandModel.lines[0], gameData, {
+      transportNodes: [],
+      transportRuns: [],
+    });
+    const node = result.nodes.Machine;
+    expect(node).toMatchObject({ type: 'transformer', limitedBy: 'input' });
+    if (node.type === 'transformer') {
+      expect(node.inputs.find((port) => port.itemId === 'Desc_Water_C')?.actualRate).toBe(30);
+    }
+  });
+
+  it('caps machine input demand and redistributes the surplus', () => {
+    const a = building('A', { typeId: 'Build_MinerMk1_C', outputs: rates({ Desc_OreIron_C: 120 }) });
+    const b = building('B', {
+      typeId: 'Build_SmelterMk1_C',
+      recipeId: 'Recipe_IngotIron_C',
+      inputs: rates({ Desc_OreIron_C: 45 }),
+      outputs: rates({ Desc_IronIngot_C: 15 }),
+    });
+    const c = building('C', {
+      typeId: 'Build_SmelterMk1_C',
+      recipeId: 'Recipe_IngotIron_C',
+      inputs: rates({ Desc_OreIron_C: 75 }),
+      outputs: rates({ Desc_IronIngot_C: 25 }),
+    });
+    const demandModel = model({
+      buildings: [a, b, c],
+      lines: [line('line-1', ['A', 'B', 'C'], { name: 'Demand line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(demandModel, demandModel.lines[0], gameData, {
+      transportNodes: [
+        {
+          id: 'S1',
+          typeId: 'Build_ConveyorAttachmentSplitter_C',
+          kind: 'splitter',
+          itemId: 'Desc_OreIron_C',
+          inputs: ['A'],
+          outputs: ['B', 'C'],
+          directInputs: ['A'],
+          directOutputs: ['B', 'C'],
+          inputRoles: [{ id: 'A', role: 'sink' }],
+          outputRoles: [
+            { id: 'B', role: 'tap' },
+            { id: 'C', role: 'tap' },
+          ],
+        },
+      ],
+      transportRuns: [],
+    });
+    expect(result.nodes.B).toMatchObject({ type: 'transformer' });
+    expect(result.nodes.C).toMatchObject({ type: 'transformer' });
+    if (result.nodes.B.type === 'transformer' && result.nodes.C.type === 'transformer') {
+      expect(result.nodes.B.inputs[0]?.actualRate).toBe(45);
+      expect(result.nodes.C.inputs[0]?.actualRate).toBe(75);
+    }
+    expect(result.nodes.S1).toMatchObject({ type: 'control', bottleneck: false });
+  });
+
+  it('marks a splitter demand-limited when no branch can absorb the surplus', () => {
+    const a = building('A', { typeId: 'Build_MinerMk1_C', outputs: rates({ Desc_OreIron_C: 120 }) });
+    const b = building('B', {
+      typeId: 'Build_SmelterMk1_C',
+      recipeId: 'Recipe_IngotIron_C',
+      inputs: rates({ Desc_OreIron_C: 45 }),
+      outputs: rates({ Desc_IronIngot_C: 15 }),
+    });
+    const c = building('C', {
+      typeId: 'Build_SmelterMk1_C',
+      recipeId: 'Recipe_IngotIron_C',
+      inputs: rates({ Desc_OreIron_C: 45 }),
+      outputs: rates({ Desc_IronIngot_C: 15 }),
+    });
+    const demandModel = model({
+      buildings: [a, b, c],
+      lines: [line('line-1', ['A', 'B', 'C'], { name: 'Demand line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(demandModel, demandModel.lines[0], gameData, {
+      transportNodes: [
+        {
+          id: 'S1',
+          typeId: 'Build_ConveyorAttachmentSplitter_C',
+          kind: 'splitter',
+          itemId: 'Desc_OreIron_C',
+          inputs: ['A'],
+          outputs: ['B', 'C'],
+          directInputs: ['A'],
+          directOutputs: ['B', 'C'],
+          inputRoles: [{ id: 'A', role: 'sink' }],
+          outputRoles: [
+            { id: 'B', role: 'tap' },
+            { id: 'C', role: 'tap' },
+          ],
+        },
+      ],
+      transportRuns: [],
+    });
+    expect(result.nodes.S1).toMatchObject({
+      type: 'control',
+      bottleneck: true,
+      bottleneckReason: 'demand',
+    });
+    expect(result.summary.bottlenecks).toContainEqual(
+      expect.objectContaining({
+        nodeId: 'S1',
+        expectedRate: 120,
+        actualRate: 90,
+        reason: 'Splitter downstream demand limits flow',
       }),
     );
   });

@@ -174,8 +174,48 @@ describe('detectBottlenecks', () => {
       available: 50,
       unit: 'items/min',
     });
-    expect(findings[0].message).toContain('limited by its output belts');
+    expect(findings[0].message).toContain('limited by output belt capacity');
     expect(findings[0].message).toContain('50 of 60 items/min');
+  });
+
+  it('reports unknown transports without treating them as bottlenecks', () => {
+    const supplyLine: SupplyLineModel = {
+      id: 'line-unknown',
+      name: 'Unknown line',
+      roots: [],
+      nodes: {
+        'run-1': {
+          id: 'run-1',
+          type: 'transport',
+          displayName: 'Belt',
+          inputs: [],
+          outputs: [],
+          medium: 'belt',
+          actualRate: 0,
+          unknown: true,
+        },
+      },
+      summary: {
+        inputs: [],
+        outputs: [],
+        power: {
+          expectedConsumption: 0,
+          actualConsumption: 0,
+          expectedGeneration: 0,
+          actualGeneration: 0,
+        },
+        bottlenecks: [],
+      },
+      notes: [],
+      buildingIds: [],
+      transportNodeIds: ['run-1'],
+    };
+    const findings = detectBottlenecks(model({ power: power(0, 0) }), gameData, [supplyLine]);
+    expect(findings.find((finding) => finding.kind === 'unmodeled')).toMatchObject({
+      severity: 'info',
+      lineId: 'line-unknown',
+    });
+    expect(supplyLine.summary.bottlenecks).toEqual([]);
   });
 
   it('summarizes findings by severity', () => {

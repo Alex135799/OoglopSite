@@ -56,6 +56,43 @@ describe('LineGraph', () => {
     expect(screen.getByText('Isolated Smelter')).toBeInTheDocument();
   });
 
+  it('shows a boost label only for Somerslooped machines', () => {
+    const boosted = building('Boosted', {
+      displayName: 'Boosted Smelter',
+      typeId: 'Build_SmelterMk1_C',
+      boost: 2,
+    });
+    const boostedLine = line('line-boost', ['Boosted'], {
+      name: 'Boosted line',
+      flows: [],
+    });
+    const { rerender } = render(
+      <LineGraph
+        line={supply([boosted], boostedLine)}
+        findings={[]}
+        onSelectBuilding={() => undefined}
+      />,
+    );
+    expect(screen.getByText('Boost +100%')).toBeInTheDocument();
+
+    const normal = building('Normal', {
+      displayName: 'Normal Smelter',
+      typeId: 'Build_SmelterMk1_C',
+    });
+    const normalLine = line('line-normal', ['Normal'], {
+      name: 'Normal line',
+      flows: [],
+    });
+    rerender(
+      <LineGraph
+        line={supply([normal], normalLine)}
+        findings={[]}
+        onSelectBuilding={() => undefined}
+      />,
+    );
+    expect(screen.queryByText(/Boost \+/)).not.toBeInTheDocument();
+  });
+
   it('renders a target handle for every building input item', () => {
     const converter = building('Converter', {
       displayName: 'Converter',
@@ -112,6 +149,7 @@ describe('LineGraph', () => {
         { from: 'A', to: 'C', itemId: 'Plate', rate: 30 },
       ],
     });
+    const onSelect = vi.fn();
     render(
       <LineGraph
         line={supply(buildings, splitLine, [
@@ -124,10 +162,12 @@ describe('LineGraph', () => {
           },
         ])}
         findings={[]}
-        onSelectBuilding={() => undefined}
+        onSelectBuilding={onSelect}
       />,
     );
     expect(screen.getAllByText('S')).toHaveLength(1);
+    fireEvent.click(screen.getByText('S'));
+    expect(onSelect).toHaveBeenCalledWith('splitter-1');
   });
 
   it('renders an actual merger between its upstream and downstream buildings', () => {

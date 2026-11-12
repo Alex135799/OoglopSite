@@ -14,7 +14,7 @@ import type {
   TransportRun,
 } from '../domain/types';
 import { gameData, resolveTypeId, type GameData, type GameRecipe } from '../api/gameData';
-import { effectiveMultiplier, estimatedPower, extractorRate, perMinute, round } from './rateMath';
+import { effectiveMultiplier, estimatedPower, extractorRate, inputMultiplier, perMinute, round } from './rateMath';
 
 interface RawProperty {
   type?: string;
@@ -649,9 +649,8 @@ export const normalizeSave = (
         notes.push('Could not resolve the extracted resource item.');
       }
     } else if (recipe) {
-      const multiplier = effectiveMultiplier(clock, boost);
-      inputs = recipeRates(recipe, multiplier);
-      outputs = outputRates(recipe, multiplier);
+      inputs = recipeRates(recipe, inputMultiplier(clock));
+      outputs = outputRates(recipe, effectiveMultiplier(clock, boost));
       displayName = machine?.name ?? recipe.name;
       const variablePower =
         machine &&
@@ -701,6 +700,18 @@ export const normalizeSave = (
       displayName,
       ...(recipeId ? { recipeId } : {}),
       ...(recipe && recipe.id ? { recipeName: recipe.name } : {}),
+      ...(recipe
+        ? {
+            recipeInputs: recipe.inputs.map((entry) => ({
+              itemId: entry.item,
+              amount: entry.amount,
+            })),
+            recipeOutputs: recipe.outputs.map((entry) => ({
+              itemId: entry.item,
+              amount: entry.amount,
+            })),
+          }
+        : {}),
       clock: round(clock, 3),
       boost: round(boost, 3),
       shards,

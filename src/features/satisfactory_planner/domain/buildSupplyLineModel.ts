@@ -34,6 +34,7 @@ interface EdgeDraft {
   actualRate: number;
   unknown: boolean;
   capacity?: number;
+  demandCap?: number;
   fromPort?: SupplyOutputPort;
   toPort?: SupplyInputPort;
 }
@@ -173,7 +174,6 @@ const buildTransportNode = (run: TransportRun): SupplyTransportNode => ({
   outputs: [],
   itemId: run.itemId,
   capacity: run.capacity,
-  expectedRate: 0,
   actualRate: 0,
   unknown: run.capacity === undefined,
   segmentCount: run.segmentCount,
@@ -395,6 +395,7 @@ export const buildSupplyLineModel = (
       from.outputs?.find((port) => port.itemId === draft.itemId)?.expectedRate ||
       to.inputs?.find((port) => port.itemId === draft.itemId)?.expectedRate ||
       0;
+    draft.expectedRate = expected;
     const outPort = addOutputPort(
       draft.from,
       draft.itemId,
@@ -453,131 +454,323 @@ export const buildSupplyLineModel = (
     if (edge.toPort) edge.toPort.unknown = true;
   };
 
-  for (const id of order) {
-    const node = nodes[id];
-    const inEdges = incoming.get(id) ?? [];
-    const outEdges = outgoing.get(id) ?? [];
-    const unknownInput = inEdges.some((edge) => edge.unknown);
-    const inputActual = inEdges.reduce((sum, edge) => sum + edge.actualRate, 0);
+  const INF = Number.POSITIVE_INFINITY;
+  const edgeCapacity = (edge: EdgeDraft): number => {
+    const target = nodes[edge.to];
+    return target?.type === 'transport' ? target.capacity ?? INF : INF;
+  };
+  const demandCaps = new Map<EdgeDraft, number>();
+  const ratioByTransformer = new Map<string, number>();
+  const addNote = (node: MutableNode, note: string) => {
+    const notes = node.notes ?? [];
+    if (!notes.includes(note)) node.notes = [...notes, note];
+  };
+  const allocatedCaps = (caps: number[]): (number | undefined)[] =>
+    caps.map((cap) => (Number.isFinite(cap) ? cap : undefined));
+  const demandSum = (edges: EdgeDraft[]): number =>
+    edges.reduce((sum, edge) => sum + (demandCaps.get(edge) ?? INF), 0);
+  const setIncomingDemand = (nodeId: string, itemId: string, total: number) => {
+    const edges = (incoming.get(nodeId) ?? []).filter((edge) => edge.itemId === itemId);
+    for (const edge of edges) {
+      if (edge.unknown) demandCaps.set(edge, INF);
+    }
+    const known = edges.filter((edge) => !edge.unknown);
+    if (known.length === 0) return;
+    if (!Number.isFinite(total)) {
+      for (const edge of known) demandCaps.set(edge, INF);
+      return;
+    }
+    const weights = known.map((edge) => Math.max(0, edge.expectedRate));
+    const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+    known.forEach((edge, index) => {
+      const share = weightTotal > EPSILON ? weights[index] / weightTotal : 1 / known.length;
+      demandCaps.set(edge, Math.max(0, total) * share);
+    });
+  };
 
-    if (node.type === 'source') {
-      const edgesByItem = new Map<string, EdgeDraft[]>();
-      for (const edge of outEdges) {
-        const list = edgesByItem.get(edge.itemId) ?? [];
-        list.push(edge);
-        edgesByItem.set(edge.itemId, list);
-      }
-      for (const [itemId, edges] of edgesByItem) {
-        const port = node.outputs.find((entry) => entry.itemId === itemId);
-        const rate = (port?.expectedRate ?? edges[0].expectedRate) / edges.length;
-        for (const edge of edges) {
-          edge.actualRate = rate;
-          if (edge.fromPort) edge.fromPort.actualRate = rate;
-          if (edge.toPort) edge.toPort.actualRate = rate;
-          if (port?.unknown) setEdgeUnknown(edge);
+  const maxIterations = 20;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    demandCaps.clear();
+
+    // Reverse pass: how much each edge can accept from upstream.
+    for (let index = order.length - 1; index >= 0; index -= 1) {
+      const id = order[index];
+      const node = nodes[id];
+      const inEdges = incoming.get(id) ?? [];
+      const outEdges = outgoing.get(id) ?? [];
+
+      if (node.type === 'source') continue;
+
+      if (node.type === 'transformer') {
+        let targetRatio = ratioByTransformer.get(id) ?? 1;
+        for (const port of node.outputs) {
+          const itemEdges = outEdges.filter((edge) => edge.itemId === port.itemId);
+          if (itemEdges.length === 0) continue;
+          const downstream = demandSum(itemEdges);
+          if (Number.isFinite(downstream) && port.expectedRate > EPSILON) {
+            targetRatio = Math.min(targetRatio, downstream / port.expectedRate);
+          }
         }
+        targetRatio = Math.max(0, Math.min(1, targetRatio));
+        for (const port of node.inputs) {
+          setIncomingDemand(id, port.itemId, port.expectedRate * targetRatio);
+        }
+        continue;
       }
-      node.actualPower = node.expectedPower;
-      for (const port of node.outputs) port.actualRate = port.expectedRate;
-      continue;
+
+      if (node.type === 'control') {
+        if (node.kind === 'splitter') {
+          for (const edge of outEdges) {
+            const downstream = edge.unknown ? INF : demandCaps.get(edge) ?? INF;
+            demandCaps.set(edge, Math.min(edgeCapacity(edge), downstream));
+          }
+          const demandByItem = new Map<string, number>();
+          for (const edge of outEdges) {
+            demandByItem.set(
+              edge.itemId,
+              (demandByItem.get(edge.itemId) ?? 0) + (demandCaps.get(edge) ?? INF),
+            );
+          }
+          for (const [itemId, total] of demandByItem) {
+            setIncomingDemand(id, itemId, total);
+          }
+        } else {
+          for (const port of node.inputs) {
+            const itemEdges = outEdges.filter((edge) => edge.itemId === port.itemId);
+            const total = itemEdges.length === 0 ? INF : demandSum(itemEdges);
+            for (const edge of inEdges.filter((entry) => entry.itemId === port.itemId)) {
+              demandCaps.set(edge, total);
+            }
+          }
+        }
+        continue;
+      }
+
+      if (node.type === 'transport') {
+        const downstream = outEdges.length === 0 ? INF : demandSum(outEdges);
+        const capacity = node.capacity ?? INF;
+        const total = Math.min(capacity, downstream);
+        setIncomingDemand(id, inEdges[0]?.itemId ?? node.itemId ?? 'unknown', total);
+      }
     }
 
-    if (node.type === 'control') {
-      const expected = inEdges.reduce((sum, edge) => sum + edge.expectedRate, 0);
-      node.expectedThroughput = round(expected);
-      node.actualThroughput = round(inputActual);
-      if (node.kind === 'splitter') {
-        const capacities = outEdges.map((edge) => {
-          const target = nodes[edge.to];
-          return target?.type === 'transport' ? target.capacity : undefined;
-        });
-        const allocation = unknownInput
-          ? { rates: outEdges.map(() => 0), delivered: 0, limited: false }
-          : allocateCappedOutputs(inputActual, capacities);
-        outEdges.forEach((edge, index) => {
+    // Reset actuals before the forward pass.
+    for (const edge of drafts) edge.actualRate = 0;
+    for (const node of Object.values(nodes) as MutableNode[]) {
+      for (const port of node.inputs ?? []) port.actualRate = 0;
+      for (const port of node.outputs ?? []) port.actualRate = 0;
+    }
+
+    const nextRatios = new Map<string, number>();
+
+    // Forward pass: route actual supply using demand caps.
+    for (const id of order) {
+      const node = nodes[id];
+      const inEdges = incoming.get(id) ?? [];
+      const outEdges = outgoing.get(id) ?? [];
+      const unknownInput = inEdges.some((edge) => edge.unknown);
+      const inputActual = inEdges.reduce((sum, edge) => sum + edge.actualRate, 0);
+
+      if (node.type === 'source') {
+        const byItem = new Map<string, EdgeDraft[]>();
+        for (const edge of outEdges) {
+          const list = byItem.get(edge.itemId) ?? [];
+          list.push(edge);
+          byItem.set(edge.itemId, list);
+        }
+        for (const [itemId, edges] of byItem) {
+          const port = node.outputs.find((entry) => entry.itemId === itemId);
+          const supply = port?.expectedRate ?? edges.reduce((sum, edge) => sum + edge.expectedRate, 0);
+          const caps = edges.map((edge) => demandCaps.get(edge) ?? INF);
+          const allocation = allocateCappedOutputs(supply, allocatedCaps(caps));
+          edges.forEach((edge, index) => {
+            edge.actualRate = allocation.rates[index] ?? 0;
+            if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+            if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+            if (port?.unknown) setEdgeUnknown(edge);
+          });
+          if (port) port.actualRate = round(allocation.delivered);
+        }
+        for (const port of node.outputs) {
+          if (!byItem.has(port.itemId)) port.actualRate = round(port.expectedRate);
+        }
+        node.actualPower = node.expectedPower;
+        continue;
+      }
+
+      if (node.type === 'control') {
+        const expected = inEdges.reduce((sum, edge) => sum + edge.expectedRate, 0);
+        node.expectedThroughput = round(expected);
+        node.actualThroughput = round(inputActual);
+        node.bottleneck = false;
+        node.bottleneckReason = undefined;
+
+        if (node.kind === 'splitter') {
+          const caps = outEdges.map((edge) =>
+            Math.min(edgeCapacity(edge), demandCaps.get(edge) ?? INF),
+          );
+          const allocation = unknownInput
+            ? { rates: outEdges.map(() => 0), delivered: 0, limited: false }
+            : allocateCappedOutputs(inputActual, allocatedCaps(caps));
+          outEdges.forEach((edge, index) => {
+            edge.actualRate = allocation.rates[index] ?? 0;
+            if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+            if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+            if (unknownInput) setEdgeUnknown(edge);
+          });
+          const capacityPotential = outEdges.reduce((sum, edge) => sum + edgeCapacity(edge), 0);
+          const demandPotential = caps.reduce((sum, cap) => sum + cap, 0);
+          const capacityLimited =
+            !unknownInput &&
+            capacityPotential + EPSILON < Math.max(inputActual, expected);
+          const demandLimited =
+            !unknownInput &&
+            !capacityLimited &&
+            demandPotential + EPSILON < expected &&
+            inputActual + EPSILON >= demandPotential;
+          node.bottleneck = capacityLimited || demandLimited;
+          if (node.bottleneck) {
+            node.bottleneckReason = capacityLimited ? 'capacity' : 'demand';
+          }
+        } else {
+          const caps = outEdges.map((edge) =>
+            Math.min(edgeCapacity(edge), demandCaps.get(edge) ?? INF),
+          );
+          const outputCapacity = caps.reduce((sum, cap) => sum + cap, 0);
+          const outputTotal = unknownInput ? 0 : Math.min(inputActual, outputCapacity);
+          const allocation = allocateCappedOutputs(outputTotal, allocatedCaps(caps));
+          outEdges.forEach((edge, index) => {
+            edge.actualRate = allocation.rates[index] ?? 0;
+            if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+            if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+            if (unknownInput) setEdgeUnknown(edge);
+          });
+          if (node.kind === 'merger' && !unknownInput) {
+            const capacityPotential = outEdges.reduce((sum, edge) => sum + edgeCapacity(edge), 0);
+            const capacityLimited = capacityPotential + EPSILON < inputActual;
+            const demandLimited =
+              !capacityLimited &&
+              outputTotal + EPSILON < inputActual &&
+              outputTotal + EPSILON < expected;
+            node.bottleneck = capacityLimited || demandLimited;
+            if (node.bottleneck) {
+              node.bottleneckReason = capacityLimited ? 'capacity' : 'demand';
+            }
+          }
+        }
+        continue;
+      }
+
+      if (node.type === 'transport') {
+        const capacity = node.capacity ?? INF;
+        const downstream = outEdges.length === 0 ? INF : demandSum(outEdges);
+        const unknown = unknownInput || node.capacity === undefined || node.itemId === 'unknown';
+        const actual = unknown ? 0 : Math.min(inputActual, capacity, downstream);
+        node.actualRate = round(actual);
+        if (unknown) node.unknown = true;
+        for (const edge of outEdges) {
+          edge.actualRate = actual;
+          if (edge.fromPort) edge.fromPort.actualRate = actual;
+          if (edge.toPort) edge.toPort.actualRate = actual;
+          if (unknown) setEdgeUnknown(edge);
+        }
+        continue;
+      }
+
+      const expectedInputs = node.inputs.filter((port) => port.expectedRate > EPSILON);
+      const ratios = expectedInputs.map((port) => {
+        const actual = inEdges
+          .filter((edge) => edge.itemId === port.itemId)
+          .reduce((sum, edge) => sum + edge.actualRate, 0);
+        return port.expectedRate > EPSILON
+          ? Math.min(1, actual / port.expectedRate)
+          : 1;
+      });
+      const supplyRatio = unknownInput ? 0 : ratios.length > 0 ? Math.min(...ratios) : 1;
+
+      let demandRatio = 1;
+      for (const port of node.outputs) {
+        const itemEdges = outEdges.filter((edge) => edge.itemId === port.itemId);
+        if (itemEdges.length === 0) continue;
+        const downstream = demandSum(itemEdges);
+        if (Number.isFinite(downstream) && port.expectedRate > EPSILON) {
+          demandRatio = Math.min(demandRatio, downstream / port.expectedRate);
+        }
+      }
+      demandRatio = Math.max(0, Math.min(1, demandRatio));
+      const ratio = Math.min(supplyRatio, demandRatio);
+      const unknown = unknownInput || node.inputs.some((port) => port.unknown);
+      node.limitedBy = unknown
+        ? 'unknown'
+        : supplyRatio + EPSILON < demandRatio
+          ? 'input'
+          : demandRatio + EPSILON < 1
+            ? 'demand'
+            : undefined;
+      nextRatios.set(id, ratio);
+
+      node.actualPower = round(node.expectedPower * ratio);
+      node.actualPowerGeneration = round(node.expectedPowerGeneration * ratio);
+      for (const port of node.inputs) {
+        const actual = inEdges
+          .filter((edge) => edge.itemId === port.itemId)
+          .reduce((sum, edge) => sum + edge.actualRate, 0);
+        port.actualRate = unknown ? 0 : round(Math.min(actual, port.expectedRate * ratio));
+        if (unknown) port.unknown = true;
+      }
+      for (const port of node.outputs) {
+        const itemEdges = outEdges.filter((edge) => edge.itemId === port.itemId);
+        const supplied = port.expectedRate * ratio;
+        if (itemEdges.length === 0) {
+          port.actualRate = unknown ? 0 : round(supplied);
+          if (unknown) port.unknown = true;
+          continue;
+        }
+        const caps = itemEdges.map((edge) => demandCaps.get(edge) ?? INF);
+        const allocation = unknown
+          ? { rates: itemEdges.map(() => 0), delivered: 0, limited: false }
+          : allocateCappedOutputs(supplied, allocatedCaps(caps));
+        itemEdges.forEach((edge, index) => {
           edge.actualRate = allocation.rates[index] ?? 0;
           if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
           if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
-          if (unknownInput) setEdgeUnknown(edge);
+          if (unknown) setEdgeUnknown(edge);
         });
-        node.bottleneck = !unknownInput && allocation.limited;
-        if (node.bottleneck) {
-          const itemId = node.itemId ?? outEdges[0]?.itemId ?? 'unknown';
-          const unit = unitFor(data, itemId);
-          node.notes = [
-            ...(node.notes ?? []),
-            `Output belts limit throughput: input ${round(inputActual)} ${unit}, delivered ${round(allocation.delivered)} ${unit}.`,
-          ];
-        }
-      } else {
-        const equal = outEdges.length > 0 ? inputActual / outEdges.length : 0;
-        for (const edge of outEdges) {
-          edge.actualRate = unknownInput ? 0 : equal;
-          if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
-          if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
-          if (unknownInput) setEdgeUnknown(edge);
-        }
-        if (node.kind === 'storage') {
-          node.notes = [...(node.notes ?? []), 'Storage is treated as pass-through; contents are not modeled.'];
-        }
+        port.actualRate = unknown ? 0 : round(allocation.delivered);
+        if (unknown) port.unknown = true;
       }
-      continue;
     }
 
-    if (node.type === 'transport') {
-      const capacity = node.capacity;
-      const actual = capacity === undefined ? 0 : Math.min(inputActual, capacity);
-      const unknown = unknownInput || capacity === undefined || node.itemId === 'unknown';
-      node.actualRate = round(actual);
-      node.expectedRate = round(inEdges.reduce((sum, edge) => sum + edge.expectedRate, 0));
-      if (unknown) node.unknown = true;
-      for (const edge of outEdges) {
-        edge.actualRate = actual;
-        if (edge.fromPort) edge.fromPort.actualRate = actual;
-        if (edge.toPort) edge.toPort.actualRate = actual;
-        if (unknown) setEdgeUnknown(edge);
+    let converged = true;
+    for (const [id, ratio] of nextRatios) {
+      if (Math.abs((ratioByTransformer.get(id) ?? 1) - ratio) > EPSILON) {
+        converged = false;
+        break;
       }
-      continue;
     }
+    ratioByTransformer.clear();
+    for (const [id, ratio] of nextRatios) ratioByTransformer.set(id, ratio);
+    if (converged) break;
+  }
 
-    const expectedInputs = node.inputs.filter((port) => port.expectedRate > EPSILON);
-    const ratios = expectedInputs.map((port) => {
-      const actual = inEdges
-        .filter((edge) => edge.itemId === port.itemId)
-        .reduce((sum, edge) => sum + edge.actualRate, 0);
-      return port.expectedRate > EPSILON ? actual / port.expectedRate : 1;
-    });
-    const ratio = unknownInput ? 0 : ratios.length > 0 ? Math.min(...ratios) : 1;
-    const unknown = unknownInput || node.inputs.some((port) => port.unknown);
-
-    node.actualPower = round(node.expectedPower * ratio);
-    node.actualPowerGeneration = round(node.expectedPowerGeneration * ratio);
-    for (const port of node.inputs) {
-      const actual = inEdges
-        .filter((edge) => edge.itemId === port.itemId)
-        .reduce((sum, edge) => sum + edge.actualRate, 0);
-      port.actualRate = unknown ? 0 : round(Math.min(actual, port.expectedRate * ratio));
-      if (unknown) port.unknown = true;
+  for (const node of Object.values(nodes) as MutableNode[]) {
+    if (node.type !== 'control') continue;
+    if (node.kind === 'storage') {
+      addNote(node, 'Storage is treated as pass-through; contents are not modeled.');
     }
-    for (const port of node.outputs) {
-      port.actualRate = unknown ? 0 : round(port.expectedRate * ratio);
-      if (unknown) port.unknown = true;
-    }
-    const edgesByItem = new Map<string, EdgeDraft[]>();
-    for (const edge of outEdges) {
-      const list = edgesByItem.get(edge.itemId) ?? [];
-      list.push(edge);
-      edgesByItem.set(edge.itemId, list);
-    }
-    for (const [itemId, edges] of edgesByItem) {
-      const port = node.outputs.find((entry) => entry.itemId === itemId);
-      const rate = ((port?.expectedRate ?? edges[0].expectedRate) * ratio) / edges.length;
-      for (const edge of edges) {
-        edge.actualRate = unknown ? 0 : round(rate);
-        if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
-        if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
-        if (unknown) setEdgeUnknown(edge);
-      }
+    if (node.bottleneck) {
+      const itemId = node.itemId ?? node.outputs?.[0]?.itemId ?? 'unknown';
+      const unit = unitFor(data, itemId);
+      const delivered = (outgoing.get(node.id) ?? []).reduce(
+        (sum, edge) => sum + edge.actualRate,
+        0,
+      );
+      addNote(
+        node,
+        node.bottleneckReason === 'demand'
+          ? `Downstream demand limits throughput: expected ${round(node.expectedThroughput)} ${unit}, delivered ${round(delivered)} ${unit}.`
+          : `Output belts limit throughput: input ${round(node.actualThroughput)} ${unit}, delivered ${round(delivered)} ${unit}.`,
+      );
     }
   }
 
@@ -644,7 +837,7 @@ export const buildSupplyLineModel = (
     (incoming.get(id) ?? []).reduce((sum, edge) => sum + edge.actualRate, 0);
 
   const bottlenecks = Object.values(nodes).flatMap((node) => {
-    if (node.type === 'transformer') {
+    if (node.type === 'transformer' && node.limitedBy === 'input') {
       const expected = node.outputs.reduce((sum, port) => sum + port.expectedRate, 0);
       const actual = node.outputs.reduce((sum, port) => sum + port.actualRate, 0);
       if (actual + EPSILON < expected) {
@@ -658,27 +851,20 @@ export const buildSupplyLineModel = (
         ];
       }
     }
-    if (node.type === 'transport' && node.unknown) {
-      return [
-        {
-          nodeId: node.id,
-          expectedRate: node.expectedRate,
-          actualRate: node.actualRate,
-          reason: 'Transport capacity or item is unknown',
-        },
-      ];
-    }
-    if (node.type === 'control' && node.kind === 'splitter' && node.bottleneck) {
+    if (node.type === 'control' && node.bottleneck) {
       const outEdges = outgoing.get(node.id) ?? [];
       const delivered = outEdges.reduce((sum, edge) => sum + edge.actualRate, 0);
       const itemId = node.itemId ?? outEdges[0]?.itemId;
+      const demandLimited = node.bottleneckReason === 'demand';
       return [
         {
           nodeId: node.id,
           ...(itemId ? { itemId } : {}),
-          expectedRate: round(inputActualFor(node.id)),
+          expectedRate: round(node.expectedThroughput),
           actualRate: round(delivered),
-          reason: 'Splitter output belts limit flow',
+          reason: demandLimited
+            ? `${node.kind === 'merger' ? 'Merger' : 'Splitter'} downstream demand limits flow`
+            : `${node.kind === 'merger' ? 'Merger' : 'Splitter'} output belts limit flow`,
         },
       ];
     }
@@ -728,7 +914,6 @@ export const buildSupplyLineModel = (
     },
     notes: [
       ...(cyclic.size > 0 ? ['The line contains a cycle; affected actual rates are unknown.'] : []),
-      'TODO: downstream demand/backpressure is not yet modeled.',
     ],
     buildingIds: [...buildings.keys()],
     transportNodeIds: assigned.transportNodes.map((node) => node.id),

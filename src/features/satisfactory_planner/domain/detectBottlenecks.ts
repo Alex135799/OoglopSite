@@ -166,8 +166,8 @@ const supplyLineFindings = (
       });
     }
 
-    const unknownTransports = line.summary.bottlenecks.filter((entry) =>
-      entry.reason.includes('Transport'),
+    const unknownTransports = Object.values(line.nodes).filter(
+      (node) => node.type === 'transport' && node.unknown,
     );
     if (unknownTransports.length > 0) {
       findings.push({
@@ -176,23 +176,28 @@ const supplyLineFindings = (
         kind: 'unmodeled',
         message: `${unknownTransports.length} transport segment(s) in ${line.name} have unknown capacity or item.`,
         lineId: line.id,
-        buildingIds: unknownTransports.slice(0, 20).map((entry) => entry.nodeId),
+        buildingIds: unknownTransports.slice(0, 20).map((node) => node.id),
       });
     }
 
-    const limitedSplitters = line.summary.bottlenecks.filter(
-      (entry) => entry.reason === 'Splitter output belts limit flow',
+    const limitedControls = line.summary.bottlenecks.filter(
+      (entry) =>
+        entry.reason.startsWith('Splitter') || entry.reason.startsWith('Merger'),
     );
-    for (const entry of limitedSplitters) {
+    for (const entry of limitedControls) {
+      const isSplitter = entry.reason.startsWith('Splitter');
       const itemId = entry.itemId ?? 'unknown';
       const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
       const label = itemId === 'unknown' ? 'flow' : itemLabel(data, itemId);
       const shortId = entry.nodeId.split('.').pop() ?? entry.nodeId;
+      const reason = entry.reason.includes('demand')
+        ? 'downstream demand'
+        : 'output belt capacity';
       findings.push({
-        id: `line:${line.id}:splitter-bottleneck:${entry.nodeId}`,
+        id: `line:${line.id}:${isSplitter ? 'splitter' : 'control'}-bottleneck:${entry.nodeId}`,
         severity: 'warning',
-        kind: 'splitter_bottleneck',
-        message: `Splitter ${shortId} in ${line.name} is limited by its output belts: ${label} ${number(entry.actualRate)} of ${number(entry.expectedRate)} ${unit}.`,
+        kind: isSplitter ? 'splitter_bottleneck' : 'control_bottleneck',
+        message: `${isSplitter ? 'Splitter' : 'Merger'} ${shortId} in ${line.name} is limited by ${reason}: ${label} ${number(entry.actualRate)} of ${number(entry.expectedRate)} ${unit}.`,
         lineId: line.id,
         ...(entry.itemId ? { itemId: entry.itemId } : {}),
         required: entry.expectedRate,

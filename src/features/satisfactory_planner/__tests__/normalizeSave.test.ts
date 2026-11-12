@@ -110,7 +110,7 @@ describe('normalizeSave', () => {
           pathName: '/Game/Recipes/Recipe_IronPlate.Recipe_IronPlate_C',
         }),
         mCurrentPotential: property('FloatProperty', 1.5),
-        mCurrentProductionBoost: property('FloatProperty', 0.5),
+        mCurrentProductionBoost: property('FloatProperty', 2),
         mInventoryPotential: property('ObjectProperty', {
           pathName: 'Persistent_Level:PersistentLevel.Build_A.InventoryPotential',
         }),
@@ -145,11 +145,13 @@ describe('normalizeSave', () => {
     expect(result.buildings).toHaveLength(1);
     const [machine] = result.buildings;
     expect(machine.clock).toBe(1.5);
-    expect(machine.boost).toBe(0.5);
+    expect(machine.boost).toBe(2);
     expect(machine.shards).toBe(2);
-    expect(machine.inputs).toEqual([{ itemId: 'Desc_IronIngot_C', rate: 67.5 }]);
-    expect(machine.outputs).toEqual([{ itemId: 'Desc_IronPlate_C', rate: 45 }]);
-    expect(machine.powerConsumption).toBeCloseTo(15.38, 1);
+    expect(machine.inputs).toEqual([{ itemId: 'Desc_IronIngot_C', rate: 45 }]);
+    expect(machine.outputs).toEqual([{ itemId: 'Desc_IronPlate_C', rate: 60 }]);
+    expect(machine.recipeInputs).toEqual([{ itemId: 'Desc_IronIngot_C', amount: 3 }]);
+    expect(machine.recipeOutputs).toEqual([{ itemId: 'Desc_IronPlate_C', amount: 2 }]);
+    expect(machine.powerConsumption).toBeCloseTo(27.35, 1);
     expect(machine.recipeName).toBe('Iron Plate');
     expect(machine.location).toEqual({ x: 10, y: 20, z: 30 });
   });

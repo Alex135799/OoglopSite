@@ -30,13 +30,24 @@ import type {
   SupplyOutputPort,
 } from '../domain/types';
 import { formatNumber } from '../format';
-import { layoutSupplyGraph, type GraphEdge } from './lineGraphLayout';
+import { productionBoostMultiplier } from '../domain/rateMath';
+import {
+  assignControlSides,
+  controlSideKey,
+  layoutSupplyGraph,
+  optimizeControlSides,
+  respaceColumns,
+  type ControlSideRequest,
+  type GraphEdge,
+} from './lineGraphLayout';
+import { routeEdges } from './edgeRouting';
 import { plannerColors, usePlannerColors, type PlannerModeColors } from '../theme';
 
 interface BuildingNodeData {
   label: string;
   subtitle: string;
   clock: number;
+  boost: number;
   severity?: Severity;
   inputItems?: string[];
   outputItems?: string[];
@@ -84,13 +95,18 @@ const BuildingNode = ({ data, selected }: NodeProps) => {
   const node = data as unknown as BuildingNodeData;
   const modeColors = usePlannerColors();
   const colors = nodeSeverity(node.severity, modeColors);
+  const boostMultiplier = productionBoostMultiplier(node.boost);
+  const boosted = boostMultiplier > 1;
+  const glow = boosted
+    ? `0 0 16px 2px ${plannerColors.somersloop.glow}`
+    : undefined;
   return (
     <Box
       sx={{
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
-        gap: 0.3,
+        gap: boosted ? 0.15 : 0.3,
         width: 220,
         height: '100%',
         p: '0.55rem 0.7rem',
@@ -98,9 +114,13 @@ const BuildingNode = ({ data, selected }: NodeProps) => {
         borderColor: colors.border,
         borderRadius: '0.45rem',
         bgcolor: colors.background,
-        boxShadow: selected
-          ? `0 0 0 3px ${plannerColors.primary.color}`
-          : `0 1px 3px ${modeColors.shadowStrong}`,
+        boxShadow: [
+          selected ? `0 0 0 3px ${plannerColors.primary.color}` : undefined,
+          glow,
+          `0 1px 3px ${modeColors.shadowStrong}`,
+        ]
+          .filter(Boolean)
+          .join(', '),
         fontSize: '0.8rem',
         lineHeight: 1.2,
         '& strong': {
@@ -144,6 +164,14 @@ const BuildingNode = ({ data, selected }: NodeProps) => {
       <Box component="span" className="planner-graph-meta">
         Clock {Math.round(node.clock * 100)}%
       </Box>
+      {boosted && (
+        <Box
+          component="span"
+          sx={{ color: plannerColors.somersloop.color, fontWeight: 600 }}
+        >
+          Boost +{Math.round((boostMultiplier - 1) * 100)}%
+        </Box>
+      )}
     </Box>
   );
 };
@@ -193,6 +221,8 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
         {transport.label}
       </Box>
       <Handle type="target" position={Position.Left} id="in-left" isConnectable={false} />
+      <Handle type="source" position={Position.Left} id="out-left" isConnectable={false} />
+      <Handle type="target" position={Position.Right} id="in-right" isConnectable={false} />
       <Handle type="source" position={Position.Right} id="out-right" isConnectable={false} />
       <Handle type="target" position={Position.Top} id="in-top" isConnectable={false} />
       <Handle type="source" position={Position.Top} id="out-top" isConnectable={false} />
@@ -212,7 +242,8 @@ interface GraphObstacle {
 }
 
 interface LaneEdgeData {
-  laneOffset: number;
+  centerX?: number;
+  centerY?: number;
   label?: string;
   obstacles?: GraphObstacle[];
   [key: string]: unknown;
@@ -240,7 +271,8 @@ const LaneEdge = ({
     sourcePosition,
     targetPosition,
     borderRadius: 8,
-    centerX: (sourceX + targetX) / 2 + (lane.laneOffset ?? 0),
+    centerX: lane.centerX ?? (sourceX + targetX) / 2,
+    centerY: lane.centerY ?? (sourceY + targetY) / 2,
   });
   const labelWidth = Math.max(18, (lane.label?.length ?? 0) * 6.5 + 8);
   const labelHeight = 18;
@@ -441,19 +473,6 @@ const layoutTransportChains = (
   return nodes;
 };
 
-const edgeColor = (severity: Severity | undefined, colors: PlannerModeColors): string => {
-  switch (severity) {
-    case 'critical':
-      return plannerColors.critical.color;
-    case 'warning':
-      return plannerColors.warning.color;
-    case 'info':
-      return plannerColors.info.color;
-    default:
-      return colors.neutral;
-  }
-};
-
 export interface LineGraphProps {
   line?: SupplyLineModel;
   findings: Finding[];
@@ -475,7 +494,7 @@ export const LineGraph = ({
       return { nodes: [], edges: [], hiddenCount: 0, hasProblems: false };
     }
 
-    const layout = layoutSupplyGraph(line, findings, problemsOnly, MAX_NODES);
+    let layout = layoutSupplyGraph(line, findings, problemsOnly, MAX_NODES);
     const visibleEdges = layout.edges;
     const attachedIds = new Set(layout.attachments.map((attachment) => attachment.controlId));
     const graphNodes: Node[] = [];
@@ -491,6 +510,7 @@ export const LineGraph = ({
           id,
           type: 'building',
           position,
+          selected: id === selectedBuildingId,
           style: { width: NODE_WIDTH, height },
           data: {
             label: node.displayName,
@@ -499,6 +519,7 @@ export const LineGraph = ({
                 ? node.recipeName ?? node.kind
                 : 'Source',
             clock: node.clock,
+            boost: node.boost,
             severity,
             ...(node.type === 'transformer' && node.inputs.length > 0
               ? { inputItems: [...new Set(node.inputs.map((port) => port.itemId))] }
@@ -513,6 +534,7 @@ export const LineGraph = ({
           id,
           type: 'transport',
           position,
+          selected: id === selectedBuildingId,
           style: { width: SPLITTER_SIZE, height },
           data: {
             label: node.kind === 'merger' ? 'M' : node.kind === 'storage' ? 'T' : 'S',
@@ -559,44 +581,91 @@ export const LineGraph = ({
       });
     }
 
-    const positioned = layoutTransportChains(graphNodes, controlNodes);
+    const centerOf = (
+      id: string,
+      positions: Map<string, { x: number; y: number }>,
+    ) => {
+      const node = line.nodes[id];
+      const position = positions.get(id);
+      if (!node || !position) return undefined;
+      const width = node.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH;
+      const height =
+        layout.heights.get(id) ??
+        (node.type === 'control' ? SPLITTER_SIZE : NODE_HEIGHT);
+      return { x: position.x + width / 2, y: position.y + height / 2 };
+    };
 
-    const bySource = new Map<string, GraphEdge[]>();
-    const byTarget = new Map<string, GraphEdge[]>();
-    for (const edge of visibleEdges) {
-      const sourceList = bySource.get(edge.from) ?? [];
-      sourceList.push(edge);
-      bySource.set(edge.from, sourceList);
-      const targetList = byTarget.get(edge.to) ?? [];
-      targetList.push(edge);
-      byTarget.set(edge.to, targetList);
+    const buildControlSides = (positions: Map<string, { x: number; y: number }>) => {
+      const sideRequests: ControlSideRequest[] = [];
+      for (const edge of visibleEdges) {
+        for (const [controlId, otherId] of [
+          [edge.from, edge.to],
+          [edge.to, edge.from],
+        ]) {
+          if (line.nodes[controlId]?.type !== 'control') continue;
+          const controlCenter = centerOf(controlId, positions);
+          const otherCenter = centerOf(otherId, positions);
+          if (!controlCenter || !otherCenter) continue;
+          sideRequests.push({
+            key: controlSideKey(edge.id, controlId),
+            controlId,
+            controlCenter,
+            otherCenter,
+          });
+        }
+      }
+      return optimizeControlSides(
+        line,
+        visibleEdges,
+        positions,
+        layout.heights,
+        assignControlSides(sideRequests),
+      );
+    };
+
+    const initialSides = buildControlSides(layout.positions);
+    const initialRoutes = routeEdges(
+      line,
+      visibleEdges,
+      layout.positions,
+      layout.heights,
+      initialSides,
+      layout.unitOf,
+      layout.unitBounds,
+    );
+    const respaced = respaceColumns(layout, initialRoutes.demands);
+    let finalUnitBounds = layout.unitBounds;
+    if (respaced.shifted) {
+      layout = { ...layout, positions: respaced.positions };
+      for (const node of graphNodes) {
+        const position = respaced.positions.get(node.id);
+        if (position) node.position = position;
+      }
+      finalUnitBounds = new Map(layout.unitBounds);
+      for (const [unitIdValue, shift] of respaced.unitShifts) {
+        const bounds = finalUnitBounds.get(unitIdValue);
+        if (bounds && shift !== 0) {
+          finalUnitBounds.set(unitIdValue, { ...bounds, x: bounds.x + shift });
+        }
+      }
     }
-    for (const list of bySource.values()) {
-      list.sort((a, b) => a.to.localeCompare(b.to) || a.itemId.localeCompare(b.itemId));
-    }
-    for (const list of byTarget.values()) {
-      list.sort((a, b) => a.from.localeCompare(b.from) || a.itemId.localeCompare(b.itemId));
-    }
-    const laneOffsets = new Map<string, number>();
-    const pairIndex = new Map<string, number>();
-    for (const edge of visibleEdges) {
-      const pairKey = `${edge.from}\u0000${edge.to}`;
-      const indexInPair = pairIndex.get(pairKey) ?? 0;
-      pairIndex.set(pairKey, indexInPair + 1);
-      const sourceList = bySource.get(edge.from) ?? [];
-      const targetList = byTarget.get(edge.to) ?? [];
-      const sourceIndex = sourceList.indexOf(edge);
-      const targetIndex = targetList.indexOf(edge);
-      const sourceLane =
-        (sourceIndex - (Math.max(1, sourceList.length) - 1) / 2) * 14;
-      const targetLane =
-        (targetIndex - (Math.max(1, targetList.length) - 1) / 2) * 8;
-      laneOffsets.set(edge.id, sourceLane + targetLane + indexInPair * 10);
-    }
+
+    const positioned = layoutTransportChains(graphNodes, controlNodes);
+    const finalPositions = new Map(positioned.map((node) => [node.id, node.position]));
+    const controlSides = buildControlSides(finalPositions);
+    const edgeRoutes = routeEdges(
+      line,
+      visibleEdges,
+      finalPositions,
+      layout.heights,
+      controlSides,
+      layout.unitOf,
+      finalUnitBounds,
+    ).routes;
 
     const obstacles: GraphObstacle[] = layout.visibleIds.flatMap((id) => {
       const node = line.nodes[id];
-      const position = layout.positions.get(id);
+      const position = finalPositions.get(id);
       if (!node || !position) return [];
       const width = node.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH;
       const height =
@@ -606,8 +675,7 @@ export const LineGraph = ({
     });
 
     const graphEdges: Edge[] = visibleEdges.map((edge) => {
-      const severity = severityOf(edge.to, findings);
-      const color = edgeColor(severity, modeColors);
+      const color = edge.atCapacity ? plannerColors.info.color : modeColors.neutral;
       const label =
         edge.unknown || edge.itemId === 'unknown'
           ? undefined
@@ -616,42 +684,22 @@ export const LineGraph = ({
       const targetNode = line.nodes[edge.to];
       const sourceControl = sourceNode?.type === 'control';
       const targetControl = targetNode?.type === 'control';
-      const sourcePosition = positioned.find((node) => node.id === edge.from)?.position;
-      const targetPosition = positioned.find((node) => node.id === edge.to)?.position;
-      const verticalControl =
-        sourceControl &&
-        targetControl &&
-        sourcePosition &&
-        targetPosition &&
-        (Math.abs(sourcePosition.x - targetPosition.x) < 60 ||
-          attachedIds.has(edge.from) ||
-          attachedIds.has(edge.to));
       const sourceOutputHandle =
         !sourceControl &&
         (sourceNode?.type === 'source' || sourceNode?.type === 'transformer') &&
         sourceNode.outputs.some((port) => port.itemId === edge.itemId)
           ? `out-${edge.itemId}`
           : undefined;
-      const sourceHandle = verticalControl
-        ? sourcePosition.y <= targetPosition.y
-          ? 'out-bottom'
-          : 'out-top'
-        : sourceControl
-          ? 'out-right'
-          : sourceOutputHandle;
+      const sourceSide = controlSides.get(controlSideKey(edge.id, edge.from)) ?? 'right';
+      const sourceHandle = sourceControl ? `out-${sourceSide}` : sourceOutputHandle;
       const targetInputHandle =
         !targetControl &&
         targetNode?.type === 'transformer' &&
         targetNode.inputs.some((port) => port.itemId === edge.itemId)
           ? `in-${edge.itemId}`
           : undefined;
-      const targetHandle = verticalControl
-        ? targetPosition.y >= sourcePosition.y
-          ? 'in-top'
-          : 'in-bottom'
-        : targetControl
-          ? 'in-left'
-          : targetInputHandle;
+      const targetSide = controlSides.get(controlSideKey(edge.id, edge.to)) ?? 'left';
+      const targetHandle = targetControl ? `in-${targetSide}` : targetInputHandle;
       return {
         id: edge.id,
         source: edge.from,
@@ -660,7 +708,12 @@ export const LineGraph = ({
         ...(targetHandle ? { targetHandle } : {}),
         type: 'lane',
         data: {
-          laneOffset: laneOffsets.get(edge.id) ?? 0,
+          ...(edgeRoutes.get(edge.id)?.centerX !== undefined
+            ? { centerX: edgeRoutes.get(edge.id)!.centerX }
+            : {}),
+          ...(edgeRoutes.get(edge.id)?.centerY !== undefined
+            ? { centerY: edgeRoutes.get(edge.id)!.centerY }
+            : {}),
           ...(label !== undefined ? { label } : {}),
           obstacles,
         } satisfies LaneEdgeData,
@@ -678,7 +731,7 @@ export const LineGraph = ({
       hiddenCount: layout.hiddenCount,
       hasProblems: layout.problemIds.size > 0,
     };
-  }, [line, findings, problemsOnly, modeColors]);
+  }, [line, findings, problemsOnly, modeColors, selectedBuildingId]);
 
   if (!line) {
     return (
@@ -735,7 +788,11 @@ export const LineGraph = ({
           edgeTypes={edgeTypes}
           onNodeClick={(_, node) => {
             const supplyNode = line.nodes[node.id];
-            if (supplyNode?.type === 'source' || supplyNode?.type === 'transformer') {
+            if (
+              supplyNode?.type === 'source' ||
+              supplyNode?.type === 'transformer' ||
+              supplyNode?.type === 'control'
+            ) {
               onSelectBuilding(node.id);
             }
           }}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allocateCappedOutputs,
   effectiveMultiplier,
+  inputMultiplier,
   estimatedPower,
   extractorRate,
   perMinute,
@@ -18,14 +19,17 @@ describe('rateMath', () => {
 
   it('combines clock and somersloop boost', () => {
     expect(effectiveMultiplier(1, 0)).toBe(1);
-    expect(effectiveMultiplier(1.5, 0.5)).toBe(2.25);
+    expect(effectiveMultiplier(1.5, 2)).toBe(3);
+    expect(effectiveMultiplier(1.5, 0.5)).toBe(1.5);
     expect(effectiveMultiplier(-1, -2)).toBe(0.01);
+    expect(inputMultiplier(1.5)).toBe(1.5);
+    expect(inputMultiplier(-1)).toBe(0.01);
   });
 
   it('estimates machine power with clock and boost exponents', () => {
     expect(estimatedPower(4, 1, 1.321929)).toBe(4);
     expect(estimatedPower(4, 2, 2)).toBe(16);
-    expect(estimatedPower(4, 2, 2, 0.5, 2)).toBe(36);
+    expect(estimatedPower(4, 2, 2, 2, 2)).toBe(64);
   });
 
   it('applies extractor purity and clock', () => {

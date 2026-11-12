@@ -6,8 +6,13 @@ export const round = (value: number, digits = 4): number => {
 export const perMinute = (amount: number, durationSeconds: number): number =>
   durationSeconds > 0 ? (amount / durationSeconds) * 60 : 0;
 
+export const inputMultiplier = (clock: number): number => Math.max(0.01, clock);
+
+export const productionBoostMultiplier = (boost: number): number =>
+  boost > 0 ? Math.max(1, boost) : 1;
+
 export const effectiveMultiplier = (clock: number, boost: number): number =>
-  Math.max(0.01, clock) * (1 + Math.max(0, boost));
+  inputMultiplier(clock) * productionBoostMultiplier(boost);
 
 export const estimatedPower = (
   basePower: number,
@@ -18,7 +23,7 @@ export const estimatedPower = (
 ): number =>
   basePower *
   Math.max(0.01, clock) ** powerExponent *
-  (1 + Math.max(0, boost)) ** boostPowerExponent;
+  productionBoostMultiplier(boost) ** boostPowerExponent;
 
 export const extractorRate = (baseRate: number, purity: number, clock: number): number =>
   baseRate * purity * Math.max(0.01, clock);

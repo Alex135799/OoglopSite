@@ -6,7 +6,7 @@ import { FindingsPanel } from '../components/FindingsPanel';
 import { BuildingDetails } from '../components/BuildingDetails';
 import { DiffView } from '../components/DiffView';
 import { diffModels } from '../domain/diffModels';
-import type { Finding } from '../domain/types';
+import type { Finding, SupplyControlNode } from '../domain/types';
 import { building, line, model, rates } from './helpers';
 
 const finding = (overrides: Partial<Finding> = {}): Finding => ({
@@ -142,6 +142,58 @@ describe('BuildingDetails', () => {
     expect(screen.getByText('1, 2, 3')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Close details' }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('renders control inputs, outputs and bottleneck reduction', async () => {
+    const onClose = vi.fn();
+    const splitter: SupplyControlNode = {
+      id: 'Build_Splitter_1',
+      type: 'control',
+      kind: 'splitter',
+      displayName: 'Splitter',
+      itemId: 'Desc_OreIron_C',
+      inputs: [
+        { id: 'in', itemId: 'Desc_OreIron_C', expectedRate: 0, actualRate: 120 },
+      ],
+      outputs: [
+        { id: 'out-1', itemId: 'Desc_OreIron_C', expectedRate: 0, actualRate: 40 },
+        { id: 'out-2', itemId: 'Desc_OreIron_C', expectedRate: 0, actualRate: 30 },
+      ],
+      expectedThroughput: 120,
+      actualThroughput: 120,
+      bottleneck: true,
+      notes: ['Output belts limit throughput.'],
+    };
+    render(<BuildingDetails supplyNode={splitter} onClose={onClose} />);
+    expect(screen.getByRole('heading', { name: 'Splitter' })).toBeInTheDocument();
+    expect(screen.getAllByText('Iron Ore').length).toBeGreaterThan(0);
+    expect(screen.getByText('Capacity reduction')).toBeInTheDocument();
+    expect(screen.getAllByText('50 items/min').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Output belts reduce throughput by/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Close details' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('shows base and boosted recipe ratios', () => {
+    render(
+      <BuildingDetails
+        building={building('Build_Boosted', {
+          displayName: 'Caterium Smelter',
+          recipeId: 'Recipe_IngotCaterium_C',
+          recipeName: 'Caterium Ingot',
+          boost: 2,
+          inputs: rates({ Desc_OreGold_C: 45 }),
+          outputs: rates({ Desc_GoldIngot_C: 30 }),
+          recipeInputs: [{ itemId: 'Desc_OreGold_C', amount: 3 }],
+          recipeOutputs: [{ itemId: 'Desc_GoldIngot_C', amount: 1 }],
+        })}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText('3 Caterium Ore → 1 Caterium Ingot')).toBeInTheDocument();
+    expect(screen.getByText('3 Caterium Ore → 2 Caterium Ingot')).toBeInTheDocument();
+    expect(screen.getByText('45 items/min')).toBeInTheDocument();
+    expect(screen.getByText('30 items/min')).toBeInTheDocument();
   });
 
   it('marks unmodeled buildings and hides the recipe', () => {

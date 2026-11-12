@@ -7,6 +7,11 @@ export interface ItemRate {
   rate: number;
 }
 
+export interface RecipeAmount {
+  itemId: string;
+  amount: number;
+}
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -24,6 +29,8 @@ export interface Building {
   shards: number;
   inputs: ItemRate[];
   outputs: ItemRate[];
+  recipeInputs?: RecipeAmount[];
+  recipeOutputs?: RecipeAmount[];
   powerConsumption: number;
   powerGeneration: number;
   modeled: boolean;
@@ -73,6 +80,7 @@ export type FindingKind =
   | 'belt_over_capacity'
   | 'pipe_over_capacity'
   | 'splitter_bottleneck'
+  | 'control_bottleneck'
   | 'missing_recipe'
   | 'unmodeled';
 
@@ -204,6 +212,7 @@ export interface SupplyTransformerNode extends SupplyNodeBase {
   actualPower: number;
   expectedPowerGeneration: number;
   actualPowerGeneration: number;
+  limitedBy?: 'input' | 'demand' | 'unknown';
 }
 
 export interface SupplyControlNode extends SupplyNodeBase {
@@ -215,6 +224,7 @@ export interface SupplyControlNode extends SupplyNodeBase {
   expectedThroughput: number;
   actualThroughput: number;
   bottleneck?: boolean;
+  bottleneckReason?: 'capacity' | 'demand';
   buffered?: boolean;
 }
 
@@ -225,7 +235,6 @@ export interface SupplyTransportNode extends SupplyNodeBase {
   medium: 'belt' | 'pipe';
   itemId?: string;
   capacity?: number;
-  expectedRate: number;
   actualRate: number;
   unknown?: boolean;
   segmentCount?: number;
