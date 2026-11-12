@@ -10,18 +10,20 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:game-data": "node scripts/build-game-data.mjs"
   },
   "dependencies": {
-    "@redux-devtools/extension": "^4.0.0",
-    "bootstrap": "^5.3.8",
+    "@dagrejs/dagre": "^3.1.3",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@etothepii/satisfactory-file-parser": "^4.1.2",
+    "@mui/material": "^9.5.0",
+    "@xyflow/react": "^12.12.0",
+    "idb": "^8.0.4",
     "react": "^19.3.1",
-    "react-bootstrap": "^2.10.10",
     "react-dom": "^19.3.1",
-    "react-redux": "^9.3.1",
-    "react-router-dom": "^7.18.5",
-    "redux": "^5.0.1",
-    "redux-thunk": "^3.1.0"
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
@@ -32,6 +34,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "^5.0.5",
+    "fake-indexeddb": "^6.2.7",
     "jsdom": "^30.1.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",

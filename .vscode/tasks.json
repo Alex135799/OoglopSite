@@ -5,6 +5,7 @@
       "label": "vite: dev",
       "type": "npm",
       "script": "dev",
+      "args": ["--host", "::"],
       "isBackground": true,
       "problemMatcher": {
         "owner": "vite",
