@@ -79,7 +79,30 @@ Fracking extractors without a resolvable resource are kept but unmodeled.
 
 - Generator type is resolved through the dataset generator map. `Build_GeneratorBiomass_C` and
   `Build_GeneratorIntegratedBiomass_C` are aliases for `Build_GeneratorBiomass_Automated_C`.
-- Generation = dataset `powerProduction * clock`.
+- Expected generation = dataset `powerProduction * clock`.
+- Fuel burn rate = `powerProduction * clock * 60 / fuelEnergyMJ`.
+- Fuel energy comes from the item `mEnergyValue`; liquid/gas values are converted from per-liter
+  units to the displayed m³ unit.
+- Fuel and water are normal supply-line inputs. Supplemental water rate =
+  `powerProduction * 0.06 * mSupplementalToPowerRatio * clock`.
+- Byproduct outputs rate = `fuelBurnRate * mByproductAmount`.
+- `mFuelInventory` selects the current fuel and supplies an internal buffer. When no fuel edge is
+  modeled, a non-empty buffer sustains nameplate generation for the snapshot, with a remaining-time
+  note; missing supplemental water still limits generation.
+- Fuel type can also be inferred by walking upstream transport runs to a storage container whose
+  inventory identifies a valid fuel.
+- Storage containers with outputs but no inputs are modeled as storage sources; they can supply
+  downstream generator demand and make otherwise singleton generator lines visible.
+- Storage stack contents are parsed from `StorageInventory` in slot order and shown with item names
+  and quantities. Inventory depletion over time is not modeled.
+- Production lines connected through a storage/splitter/merger transport node are merged, so a
+  shared fuel storage and its splitter tree appear in the same generator line as every connected
+  generator.
+- A generator with no resolvable fuel type is still modeled with unknown fuel throughput and
+  nameplate generation; unknown fuel does not reduce power.
+- Generator lines are shown even when they contain only one building, unlike other singleton lines.
+- Actual generation is `expected × min(fuel ratio, water ratio, 1)` for known fuels. Global power
+  headroom uses actual generation and expected consumption.
 - Geothermal generators have no fixed dataset output; they stay unmodeled and are reported.
 - Building power use comes from the recipe/machine estimate above. For unmodeled candidates the
   planner falls back to the power info component's `mTargetConsumption`, when present.
@@ -131,9 +154,9 @@ Transport runs between controls/buildings are compressed from connected belt/pip
 pipes have only an actual rate and a capacity, not an expected rate, so they are never marked as
 bottlenecks. A run operating at its capacity is colored blue in the graph as a possible constraint;
 the upstream splitter or downstream building decides whether that is actually a bottleneck. Storage
-is a control subtype and is pass-through in v1; inventory contents are not modeled. Each
-control/transport run belongs to one line, assigned by the greatest overlap with that line's
-production buildings.
+is a control subtype and is pass-through in v1; its stack contents are shown in details but inventory
+depletion is not modeled. Each control/transport run belongs to one line, assigned by the greatest
+overlap with that line's production buildings.
 
 ## Transport port roles
 
@@ -169,10 +192,24 @@ and avoids showing an edge-less machine that still has a recipe input requiremen
   spline segments rather than one object per belt segment. Mapping a recipe flow to a specific
   chain without measured throughput is not reliable.
 - Belt capacity is known from the dataset (`mSpeed / 2`, e.g. Mk.4 = 480/min) and pipe capacity
-  from `mFlowLimit * 60` (Mk.1 = 300 m³/min), but the planner does **not** emit belt/pipe capacity
-  findings in v1. `capacity` is therefore omitted rather than guessed. This is the documented
-  fallback in the plan's risk section.
-- The planner counts belts and pipes for context; it does not model their contents.
+  from `mFlowLimit * 60` (Mk.1 = 300 m³/min). Transport runs carry the minimum capacity across
+  their segments.
+- Pipe factory endpoints (`FGPipeConnectionFactory`) are classified separately as fluid inputs or
+  outputs from the building's liquid/gas ports. Buildings with both map their pipe components to
+  input ports first, then output ports.
+- Pipe components (`FGPipeConnectionComponent`) and junctions are traversed bidirectionally. Pipe
+  networks are oriented from producer endpoints to consumer endpoints by shortest path; tied or
+  unresolvable directions are marked unknown.
+- Pipeline junctions become `J` controls. They sum incoming flow, then water-fill outgoing runs by
+  pipe capacity and downstream demand.
+- Fluid buffers and industrial tanks become `T` storage controls on pipe networks. Their `mFluidBox`
+  volume is shown as storage contents; pipe ports can act as sinks or taps from network orientation.
+  Tanks absorb surplus production without capacity limits in the current snapshot. If a tank's
+  output exceeds its input, it supplies from storage and a critical depletion-time finding is
+  emitted. Tank inventory depletion is not advanced over time.
+- Head lift, pressure, and sloshing are not modeled.
+- Conflicting fluid items in one connected pipe graph mark the affected runs/junctions unknown.
+- Empty fluid tanks still appear as storage controls when they have pipe connections.
 
 ## Save header and versions
 
@@ -214,3 +251,12 @@ With `throwErrors: false`, the parser may silently drop badly corrupt objects. T
 detect those objects. Coverage is therefore "of what the parser returned", not "of what the save
 claims". This is preferable to inventing rates for objects that failed to parse, and it is stated
 in the UI.
+
+## Production tier/group layout
+
+- Extractors are tier 0. A transformer's tier is `1 + max(upstream production tier)`; no-upstream non-sources are tier 1.
+- Production groups are keyed by recipe plus the sorted set of direct upstream production buildings. Extractors group by type and output item.
+- Tier columns contain group row cells. Rows are shared across tiers and use the tallest group in that row.
+- Machine-attached controls stay inside their group cell. Standalone junctions, tanks, and storage use control columns.
+- Row slots are assigned deterministically with upstream/downstream barycenter passes to reduce crossings.
+- Group cells reserve padding and never share a row cell within a tier. Column gutters expand with lane demand.

@@ -191,8 +191,108 @@ describe('normalizeSave', () => {
     ]);
     const result = normalizeSave(save, options);
     expect(result.buildings[0].powerGeneration).toBe(75);
+    expect(result.buildings[0].fuelUnknown).toBe(true);
     expect(result.power.generation).toBe(75);
     expect(result.power.generators).toBe(1);
+  });
+
+  it('models coal generator fuel, water and inventory runtime', () => {
+    const save = makeSave([
+      entity(
+        '/Game/Buildable/GeneratorCoal/Build_GeneratorCoal.Build_GeneratorCoal_C',
+        'Build_Coal',
+        {
+          mFuelInventory: property('ObjectProperty', {
+            pathName: 'Persistent_Level:PersistentLevel.Build_Coal.FuelInventory',
+          }),
+          mCurrentFuelClass: property('ObjectProperty', {
+            pathName: '/Game/FactoryGame/Resource/RawResources/Coal/Desc_Coal.Desc_Coal_C',
+          }),
+        },
+      ),
+      component(
+        '/Script/FactoryGame.FGInventoryComponent',
+        'Persistent_Level:PersistentLevel.Build_Coal.FuelInventory',
+        {
+          mInventoryStacks: {
+            type: 'ArrayProperty',
+            values: [
+              {
+                type: 'InventoryStack',
+                properties: {
+                  Item: property('StructProperty', {
+                    itemReference: {
+                      pathName: '/Game/FactoryGame/Resource/RawResources/Coal/Desc_Coal.Desc_Coal_C',
+                    },
+                  }),
+                  NumItems: property('IntProperty', 100),
+                },
+              },
+            ],
+          },
+        },
+      ),
+    ]);
+    const [generator] = normalizeSave(save, options).buildings;
+    expect(generator).toMatchObject({
+      powerGeneration: 75,
+      selectedFuel: 'Desc_Coal_C',
+      inputs: [
+        { itemId: 'Desc_Coal_C', rate: 15 },
+        { itemId: 'Desc_Water_C', rate: 45 },
+      ],
+      outputs: [],
+      fuelBuffer: {
+        itemId: 'Desc_Coal_C',
+        amount: 100,
+        runtimeMinutes: 6.6667,
+      },
+    });
+    expect(generator.notes?.join(' ')).toContain('about 6.6667 min');
+  });
+
+  it('models nuclear generator water and waste output', () => {
+    const save = makeSave([
+      entity(
+        '/Game/Buildable/GeneratorNuclear/Build_GeneratorNuclear.Build_GeneratorNuclear_C',
+        'Build_Nuclear',
+        {
+          mFuelInventory: property('ObjectProperty', {
+            pathName: 'Persistent_Level:PersistentLevel.Build_Nuclear.FuelInventory',
+          }),
+        },
+      ),
+      component(
+        '/Script/FactoryGame.FGInventoryComponent',
+        'Persistent_Level:PersistentLevel.Build_Nuclear.FuelInventory',
+        {
+          mInventoryStacks: {
+            type: 'ArrayProperty',
+            values: [
+              {
+                type: 'InventoryStack',
+                properties: {
+                  Item: property('StructProperty', {
+                    itemReference: {
+                      pathName:
+                        '/Game/FactoryGame/Resource/Parts/NuclearFuelRod/Desc_NuclearFuelRod.Desc_NuclearFuelRod_C',
+                    },
+                  }),
+                  NumItems: property('IntProperty', 10),
+                },
+              },
+            ],
+          },
+        },
+      ),
+    ]);
+    const [generator] = normalizeSave(save, options).buildings;
+    expect(generator.inputs).toEqual([
+      { itemId: 'Desc_NuclearFuelRod_C', rate: 0.2 },
+      { itemId: 'Desc_Water_C', rate: 240 },
+    ]);
+    expect(generator.outputs).toEqual([{ itemId: 'Desc_NuclearWaste_C', rate: 10 }]);
+    expect(generator.selectedFuel).toBe('Desc_NuclearFuelRod_C');
   });
 
   it('keeps unknown production buildings out of rates and reports them', () => {

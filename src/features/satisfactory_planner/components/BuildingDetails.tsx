@@ -16,6 +16,7 @@ import type { Building, SupplyNode } from '../domain/types';
 import { formatMW, formatNumber, itemName, itemUnit } from '../format';
 import { productionBoostMultiplier } from '../domain/rateMath';
 import { plannerColors, usePlannerColors } from '../theme';
+import { StorageContents } from './StorageContents';
 
 export interface BuildingDetailsProps {
   building?: Building;
@@ -88,7 +89,11 @@ export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetai
         ? 'Splitter'
         : supplyNode.kind === 'merger'
           ? 'Merger'
-          : 'Storage';
+          : supplyNode.kind === 'junction'
+            ? 'Pipeline Junction'
+            : supplyNode.kind === 'tank'
+              ? 'Fluid Storage'
+              : 'Storage';
 
     return (
       <Card>
@@ -197,6 +202,8 @@ export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetai
             </>
           )}
 
+          {supplyNode.kind === 'storage' || supplyNode.kind === 'tank' ? <StorageContents contents={supplyNode.contents} /> : null}
+
           {supplyNode.notes && supplyNode.notes.length > 0 && (
             <>
               <Typography variant="subtitle2" component="h3" className="planner-details-subhead">
@@ -283,6 +290,14 @@ export const BuildingDetails = ({ building, supplyNode, onClose }: BuildingDetai
           }}
         >
           {building.recipeName && <Fact label="Recipe">{building.recipeName}</Fact>}
+          {building.selectedFuel && (
+            <Fact label="Fuel">{itemName(building.selectedFuel)}</Fact>
+          )}
+          {building.fuelBuffer && (
+            <Fact label="Fuel duration">
+              {formatNumber(building.fuelBuffer.runtimeMinutes)} min
+            </Fact>
+          )}
           <Fact label="Clock">{formatNumber(building.clock * 100, 1)}%</Fact>
           <Fact label="Somersloop boost">{formatNumber(building.boost * 100, 1)}%</Fact>
           {building.recipeInputs && building.recipeOutputs && (

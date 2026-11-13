@@ -20,10 +20,17 @@ export const PlannerSummary = ({ model, analysis }: PlannerSummaryProps) => {
   const colors = usePlannerColors();
   const findings = summarizeFindings(analysis.findings);
   const lineStats = analysis.lineStats;
+  const generation =
+    analysis.power.expectedGeneration > 0
+      ? analysis.power.actualGeneration
+      : model.power.generation;
+  const headroom = generation - model.power.consumption;
+  const headroomRatio =
+    generation > 0 ? headroom / generation : model.power.consumption === 0 ? 1 : 0;
   const powerColor =
-    model.power.headroom < 0
+    headroom < 0
       ? 'error'
-      : model.power.headroomRatio < 0.1
+      : headroomRatio < 0.1
         ? 'warning'
         : 'success';
 
@@ -106,14 +113,14 @@ export const PlannerSummary = ({ model, analysis }: PlannerSummaryProps) => {
               {formatMW(model.power.consumption)}
             </Typography>
             <Typography variant="caption" className="planner-muted">
-              demand · {formatMW(model.power.generation)} modeled generation
+              demand · {formatMW(generation)} actual generation
             </Typography>
             <Box sx={{ mt: 1 }}>
               <Chip
                 size="small"
                 color={powerColor}
-                label={`${model.power.headroom >= 0 ? 'Headroom ' : 'Deficit '}${formatMW(
-                  Math.abs(model.power.headroom),
+                label={`${headroom >= 0 ? 'Headroom ' : 'Deficit '}${formatMW(
+                  Math.abs(headroom),
                 )}`}
               />
             </Box>

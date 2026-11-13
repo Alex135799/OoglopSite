@@ -56,7 +56,14 @@ export const PlannerPage = ({
   const { view } = usePlannerView();
   const analysis = useMemo(() => (model ? analyzeModel(model) : undefined), [model]);
   const lineStats = analysis?.lineStats;
-  const displayLines = analysis?.supplyLines.filter((line) => line.buildingIds.length > 1) ?? [];
+  const displayLines =
+    analysis?.supplyLines.filter(
+      (line) =>
+        line.buildingIds.length > 1 ||
+        Object.values(line.nodes).some(
+          (node) => node.type === 'transformer' && node.kind === 'generator',
+        ),
+    ) ?? [];
 
   const buildingsById = useMemo(
     () => new Map((model?.buildings ?? []).map((building) => [building.id, building])),

@@ -10,6 +10,9 @@ export const formatPercent = (value: number): string => `${formatNumber(value * 
 export const itemName = (itemId: string): string =>
   gameData.items[itemId]?.name ?? itemId;
 
+export const itemStackSize = (itemId: string): number =>
+  gameData.items[itemId]?.stackSize ?? 1;
+
 export const itemUnit = (itemId: string): string => {
   const form = gameData.items[itemId]?.form;
   return form === 'liquid' || form === 'gas' ? 'm³/min' : 'items/min';

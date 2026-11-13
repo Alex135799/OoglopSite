@@ -135,6 +135,9 @@ const buildBuildingNode = (
     actualPower: building.powerConsumption,
     expectedPowerGeneration: building.powerGeneration,
     actualPowerGeneration: building.powerGeneration,
+    ...(building.selectedFuel ? { selectedFuel: building.selectedFuel } : {}),
+    ...(building.fuelBuffer ? { fuelBuffer: building.fuelBuffer } : {}),
+    ...(building.fuelUnknown ? { fuelUnknown: true } : {}),
     inputs: building.inputs.map((rate, index) =>
       inputPort({ id: building.id } as SupplyNode, rate.itemId, rate.rate, 0, unknown, index),
     ),
@@ -155,13 +158,24 @@ const buildControlNode = (node: SplitterNode): SupplyControlNode => ({
   id: node.id,
   type: 'control',
   kind: node.kind,
-  displayName: node.kind === 'storage' ? 'Storage' : node.kind === 'merger' ? 'Merger' : 'Splitter',
+  displayName:
+    node.kind === 'storage'
+      ? 'Storage'
+      : node.kind === 'merger'
+        ? 'Merger'
+        : node.kind === 'junction'
+          ? 'Pipeline Junction'
+          : node.kind === 'tank'
+            ? 'Fluid Storage'
+            : 'Splitter',
   ...(node.itemId ? { itemId: node.itemId } : {}),
   inputs: [],
   outputs: [],
   expectedThroughput: 0,
   actualThroughput: 0,
   ...(node.kind === 'storage' ? { buffered: true } : {}),
+  ...(node.contents ? { contents: node.contents } : {}),
+  ...(node.storedAmount !== undefined ? { storedAmount: node.storedAmount } : {}),
   notes: node.itemId ? [`Item: ${node.itemId}`] : undefined,
 });
 
@@ -175,7 +189,7 @@ const buildTransportNode = (run: TransportRun): SupplyTransportNode => ({
   itemId: run.itemId,
   capacity: run.capacity,
   actualRate: 0,
-  unknown: run.capacity === undefined,
+  unknown: run.unknown === true || run.capacity === undefined,
   segmentCount: run.segmentCount,
   fromNodeId: run.fromNodeId,
   toNodeId: run.toNodeId,
@@ -519,20 +533,32 @@ export const buildSupplyLineModel = (
       }
 
       if (node.type === 'control') {
-        if (node.kind === 'splitter') {
+        if (node.kind === 'tank') {
           for (const edge of outEdges) {
             const downstream = edge.unknown ? INF : demandCaps.get(edge) ?? INF;
             demandCaps.set(edge, Math.min(edgeCapacity(edge), downstream));
           }
-          const demandByItem = new Map<string, number>();
-          for (const edge of outEdges) {
-            demandByItem.set(
-              edge.itemId,
-              (demandByItem.get(edge.itemId) ?? 0) + (demandCaps.get(edge) ?? INF),
-            );
-          }
-          for (const [itemId, total] of demandByItem) {
-            setIncomingDemand(id, itemId, total);
+          for (const edge of inEdges) demandCaps.set(edge, INF);
+        } else if (node.kind === 'splitter' || node.kind === 'junction') {
+          if (outEdges.length === 0) {
+            for (const port of node.inputs) {
+              setIncomingDemand(id, port.itemId, 0);
+            }
+          } else {
+            for (const edge of outEdges) {
+              const downstream = edge.unknown ? INF : demandCaps.get(edge) ?? INF;
+              demandCaps.set(edge, Math.min(edgeCapacity(edge), downstream));
+            }
+            const demandByItem = new Map<string, number>();
+            for (const edge of outEdges) {
+              demandByItem.set(
+                edge.itemId,
+                (demandByItem.get(edge.itemId) ?? 0) + (demandCaps.get(edge) ?? INF),
+              );
+            }
+            for (const [itemId, total] of demandByItem) {
+              setIncomingDemand(id, itemId, total);
+            }
           }
         } else {
           for (const port of node.inputs) {
@@ -572,6 +598,7 @@ export const buildSupplyLineModel = (
       const inputActual = inEdges.reduce((sum, edge) => sum + edge.actualRate, 0);
 
       if (node.type === 'source') {
+        let demandLimited = false;
         const byItem = new Map<string, EdgeDraft[]>();
         for (const edge of outEdges) {
           const list = byItem.get(edge.itemId) ?? [];
@@ -583,6 +610,7 @@ export const buildSupplyLineModel = (
           const supply = port?.expectedRate ?? edges.reduce((sum, edge) => sum + edge.expectedRate, 0);
           const caps = edges.map((edge) => demandCaps.get(edge) ?? INF);
           const allocation = allocateCappedOutputs(supply, allocatedCaps(caps));
+          demandLimited ||= allocation.limited;
           edges.forEach((edge, index) => {
             edge.actualRate = allocation.rates[index] ?? 0;
             if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
@@ -594,6 +622,7 @@ export const buildSupplyLineModel = (
         for (const port of node.outputs) {
           if (!byItem.has(port.itemId)) port.actualRate = round(port.expectedRate);
         }
+        node.limitedBy = demandLimited ? 'demand' : undefined;
         node.actualPower = node.expectedPower;
         continue;
       }
@@ -604,8 +633,39 @@ export const buildSupplyLineModel = (
         node.actualThroughput = round(inputActual);
         node.bottleneck = false;
         node.bottleneckReason = undefined;
+        node.depletionMinutes = undefined;
+        node.surplusRate = undefined;
 
-        if (node.kind === 'splitter') {
+        if (node.kind === 'tank') {
+          const caps = outEdges.map((edge) =>
+            Math.min(edgeCapacity(edge), demandCaps.get(edge) ?? INF),
+          );
+          const outputCapacity = caps.reduce((sum, cap) => sum + cap, 0);
+          const storedAmount = node.storedAmount ?? 0;
+          const outputTotal = unknownInput
+            ? 0
+            : storedAmount > 0
+              ? Number.isFinite(outputCapacity)
+                ? outputCapacity
+                : inputActual
+              : Math.min(inputActual, outputCapacity);
+          const allocation = allocateCappedOutputs(outputTotal, allocatedCaps(caps));
+          outEdges.forEach((edge, index) => {
+            edge.actualRate = allocation.rates[index] ?? 0;
+            if (edge.fromPort) edge.fromPort.actualRate = edge.actualRate;
+            if (edge.toPort) edge.toPort.actualRate = edge.actualRate;
+            if (unknownInput) setEdgeUnknown(edge);
+          });
+          const net = outputTotal - inputActual;
+          if (net > EPSILON && storedAmount > 0) {
+            node.depletionMinutes = round(storedAmount / net);
+          } else if (net < -EPSILON) {
+            node.surplusRate = round(-net);
+          }
+          continue;
+        }
+
+        if (node.kind === 'splitter' || node.kind === 'junction') {
           const caps = outEdges.map((edge) =>
             Math.min(edgeCapacity(edge), demandCaps.get(edge) ?? INF),
           );
@@ -637,7 +697,14 @@ export const buildSupplyLineModel = (
             Math.min(edgeCapacity(edge), demandCaps.get(edge) ?? INF),
           );
           const outputCapacity = caps.reduce((sum, cap) => sum + cap, 0);
-          const outputTotal = unknownInput ? 0 : Math.min(inputActual, outputCapacity);
+          const storageSource = node.kind === 'storage' && inEdges.length === 0 && Boolean(node.itemId);
+          const outputTotal = unknownInput
+            ? 0
+            : storageSource
+              ? Number.isFinite(outputCapacity)
+                ? outputCapacity
+                : 0
+              : Math.min(inputActual, outputCapacity);
           const allocation = allocateCappedOutputs(outputTotal, allocatedCaps(caps));
           outEdges.forEach((edge, index) => {
             edge.actualRate = allocation.rates[index] ?? 0;
@@ -677,16 +744,34 @@ export const buildSupplyLineModel = (
         continue;
       }
 
+      const fuelUnknown = node.kind === 'generator' && node.fuelUnknown === true;
+      const buffer =
+        node.kind === 'generator' && node.fuelBuffer ? node.fuelBuffer : undefined;
+      const bufferActive = Boolean(buffer && buffer.amount > 0);
+      const portActual = (itemId: string): number => {
+        const actual = inEdges
+          .filter((edge) => edge.itemId === itemId)
+          .reduce((sum, edge) => sum + edge.actualRate, 0);
+        if (bufferActive && buffer?.itemId === itemId) {
+          const expected = node.inputs.find((port) => port.itemId === itemId)?.expectedRate ?? 0;
+          return Math.max(actual, expected);
+        }
+        return actual;
+      };
       const expectedInputs = node.inputs.filter((port) => port.expectedRate > EPSILON);
       const ratios = expectedInputs.map((port) => {
-        const actual = inEdges
-          .filter((edge) => edge.itemId === port.itemId)
-          .reduce((sum, edge) => sum + edge.actualRate, 0);
+        const actual = portActual(port.itemId);
         return port.expectedRate > EPSILON
           ? Math.min(1, actual / port.expectedRate)
           : 1;
       });
-      const supplyRatio = unknownInput ? 0 : ratios.length > 0 ? Math.min(...ratios) : 1;
+      const supplyRatio = unknownInput
+        ? 0
+        : fuelUnknown
+          ? 1
+          : ratios.length > 0
+            ? Math.min(...ratios)
+            : 1;
 
       let demandRatio = 1;
       for (const port of node.outputs) {
@@ -700,7 +785,7 @@ export const buildSupplyLineModel = (
       demandRatio = Math.max(0, Math.min(1, demandRatio));
       const ratio = Math.min(supplyRatio, demandRatio);
       const unknown = unknownInput || node.inputs.some((port) => port.unknown);
-      node.limitedBy = unknown
+      node.limitedBy = unknown || fuelUnknown
         ? 'unknown'
         : supplyRatio + EPSILON < demandRatio
           ? 'input'
@@ -712,9 +797,7 @@ export const buildSupplyLineModel = (
       node.actualPower = round(node.expectedPower * ratio);
       node.actualPowerGeneration = round(node.expectedPowerGeneration * ratio);
       for (const port of node.inputs) {
-        const actual = inEdges
-          .filter((edge) => edge.itemId === port.itemId)
-          .reduce((sum, edge) => sum + edge.actualRate, 0);
+        const actual = portActual(port.itemId);
         port.actualRate = unknown ? 0 : round(Math.min(actual, port.expectedRate * ratio));
         if (unknown) port.unknown = true;
       }
@@ -756,7 +839,25 @@ export const buildSupplyLineModel = (
   for (const node of Object.values(nodes) as MutableNode[]) {
     if (node.type !== 'control') continue;
     if (node.kind === 'storage') {
-      addNote(node, 'Storage is treated as pass-through; contents are not modeled.');
+      addNote(node, 'Storage contents are shown; inventory depletion is not modeled.');
+    }
+    if (node.kind === 'junction') {
+      addNote(node, 'Pipeline junction merges incoming flow and splits it by demand and pipe capacity.');
+    }
+    if (node.kind === 'tank') {
+      addNote(node, 'Fluid storage contents are shown; tank inventory depletion is not simulated.');
+      if (node.depletionMinutes !== undefined) {
+        addNote(
+          node,
+          `Stored contents will deplete in about ${round(node.depletionMinutes)} min at the current net draw.`,
+        );
+      }
+      if (node.surplusRate !== undefined) {
+        addNote(
+          node,
+          `Accumulating surplus at ${round(node.surplusRate)} m³/min above current output.`,
+        );
+      }
     }
     if (node.bottleneck) {
       const itemId = node.itemId ?? node.outputs?.[0]?.itemId ?? 'unknown';
@@ -863,8 +964,8 @@ export const buildSupplyLineModel = (
           expectedRate: round(node.expectedThroughput),
           actualRate: round(delivered),
           reason: demandLimited
-            ? `${node.kind === 'merger' ? 'Merger' : 'Splitter'} downstream demand limits flow`
-            : `${node.kind === 'merger' ? 'Merger' : 'Splitter'} output belts limit flow`,
+            ? `${node.kind === 'merger' ? 'Merger' : node.kind === 'junction' ? 'Junction' : 'Splitter'} downstream demand limits flow`
+            : `${node.kind === 'merger' ? 'Merger' : node.kind === 'junction' ? 'Junction' : 'Splitter'} output capacity limits flow`,
         },
       ];
     }

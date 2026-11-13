@@ -316,9 +316,186 @@ describe('buildSupplyLineModel', () => {
         itemId: 'Desc_OreIron_C',
         expectedRate: 60,
         actualRate: 50,
-        reason: 'Splitter output belts limit flow',
+        reason: 'Splitter output capacity limits flow',
       }),
     );
+  });
+
+  it('limits generator power by fuel and water supply', () => {
+    const fuel = building('Fuel', { typeId: 'Build_MinerMk1_C', outputs: rates({ Desc_Coal_C: 7.5 }) });
+    const water = building('Water', { typeId: 'Build_WaterPump_C', outputs: rates({ Desc_Water_C: 60 }) });
+    const generator = building('Generator', {
+      typeId: 'Build_GeneratorCoal_C',
+      displayName: 'Coal Generator',
+      inputs: rates({ Desc_Coal_C: 15, Desc_Water_C: 45 }),
+      outputs: rates({ Desc_NuclearWaste_C: 10 }),
+      powerGeneration: 75,
+    });
+    const generatorModel = model({
+      buildings: [fuel, water, generator],
+      lines: [
+        line('line-1', ['Fuel', 'Water', 'Generator'], {
+          name: 'Coal line',
+          flows: [
+            { from: 'Fuel', to: 'Generator', itemId: 'Desc_Coal_C', rate: 7.5 },
+            { from: 'Water', to: 'Generator', itemId: 'Desc_Water_C', rate: 45 },
+          ],
+        }),
+      ],
+    });
+    const result = buildSupplyLineModel(generatorModel, generatorModel.lines[0], gameData, {
+      transportNodes: [],
+      transportRuns: [],
+    });
+    expect(result.nodes.Generator).toMatchObject({
+      type: 'transformer',
+      kind: 'generator',
+      expectedPowerGeneration: 75,
+      actualPowerGeneration: 37.5,
+      limitedBy: 'input',
+    });
+    const generatorNode = result.nodes.Generator;
+    if (generatorNode.type === 'transformer') {
+      expect(generatorNode.outputs[0]?.actualRate).toBe(5);
+    }
+  });
+
+  it('merges and routes flow through a pipe junction control', () => {
+    const a = building('A', { typeId: 'Build_WaterPump_C', outputs: rates({ Desc_Water_C: 60 }) });
+    const b = building('B', { typeId: 'Build_WaterPump_C', outputs: rates({ Desc_Water_C: 60 }) });
+    const c = building('C', {
+      typeId: 'Build_Refinery_C',
+      recipeId: 'Recipe_Test_C',
+      inputs: rates({ Desc_Water_C: 60 }),
+      outputs: rates({ Desc_Product_C: 30 }),
+    });
+    const junctionModel = model({
+      buildings: [a, b, c],
+      lines: [line('line-1', ['A', 'B', 'C'], { name: 'Water line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(junctionModel, junctionModel.lines[0], gameData, {
+      transportNodes: [
+        {
+          id: 'J1',
+          typeId: 'Build_PipelineJunction_Cross_C',
+          kind: 'junction',
+          itemId: 'Desc_Water_C',
+          inputs: ['A', 'B'],
+          outputs: ['C'],
+          directInputs: ['A', 'B'],
+          directOutputs: ['C'],
+          inputRoles: [
+            { id: 'A', role: 'sink' },
+            { id: 'B', role: 'sink' },
+          ],
+          outputRoles: [{ id: 'C', role: 'tap' }],
+        },
+      ],
+      transportRuns: [],
+    });
+    expect(result.nodes.J1).toMatchObject({
+      type: 'control',
+      kind: 'junction',
+      actualThroughput: 60,
+    });
+    if (result.nodes.C.type === 'transformer') {
+      expect(result.nodes.C.inputs[0]?.actualRate).toBe(60);
+    }
+  });
+
+  it('keeps nameplate power when generator fuel type is unknown', () => {
+    const generator = building('Generator', {
+      typeId: 'Build_GeneratorFuel_C',
+      displayName: 'Fuel Generator',
+      inputs: [],
+      outputs: [],
+      powerGeneration: 250,
+      fuelUnknown: true,
+    });
+    const generatorModel = model({
+      buildings: [generator],
+      lines: [line('line-1', ['Generator'], { name: 'Generator line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(generatorModel, generatorModel.lines[0], gameData, {
+      transportNodes: [],
+      transportRuns: [],
+    });
+    expect(result.nodes.Generator).toMatchObject({
+      type: 'transformer',
+      kind: 'generator',
+      expectedPowerGeneration: 250,
+      actualPowerGeneration: 250,
+      limitedBy: 'unknown',
+    });
+  });
+
+  it('supplies generator fuel from an upstream storage source', () => {
+    const generator = building('Generator', {
+      typeId: 'Build_GeneratorBiomass_Automated_C',
+      displayName: 'Biomass Burner',
+      inputs: rates({ Desc_PackagedBiofuel_C: 2.4 }),
+      outputs: [],
+      powerGeneration: 30,
+      selectedFuel: 'Desc_PackagedBiofuel_C',
+    });
+    const generatorModel = model({
+      buildings: [generator],
+      lines: [line('line-1', ['Generator'], { name: 'Generator line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(generatorModel, generatorModel.lines[0], gameData, {
+      transportNodes: [
+        {
+          id: 'Storage',
+          typeId: 'Build_StorageContainerMk1_C',
+          kind: 'storage',
+          itemId: 'Desc_PackagedBiofuel_C',
+          inputs: [],
+          outputs: ['Generator'],
+          directInputs: [],
+          directOutputs: ['Generator'],
+          inputRoles: [],
+          outputRoles: [{ id: 'Generator', role: 'tap' }],
+        },
+      ],
+      transportRuns: [],
+    });
+    expect(result.nodes.Generator).toMatchObject({
+      type: 'transformer',
+      actualPowerGeneration: 30,
+    });
+    if (result.nodes.Generator.type === 'transformer') {
+      expect(result.nodes.Generator.inputs[0]?.actualRate).toBe(2.4);
+    }
+  });
+
+  it('uses internal generator fuel when no fuel edge exists', () => {
+    const generator = building('Generator', {
+      typeId: 'Build_GeneratorBiomass_Automated_C',
+      displayName: 'Biomass Burner',
+      inputs: rates({ Desc_PackagedBiofuel_C: 2.4 }),
+      outputs: [],
+      powerGeneration: 30,
+      selectedFuel: 'Desc_PackagedBiofuel_C',
+      fuelBuffer: {
+        itemId: 'Desc_PackagedBiofuel_C',
+        amount: 100,
+        runtimeMinutes: 41.6667,
+      },
+    });
+    const generatorModel = model({
+      buildings: [generator],
+      lines: [line('line-1', ['Generator'], { name: 'Generator line', flows: [] })],
+    });
+    const result = buildSupplyLineModel(generatorModel, generatorModel.lines[0], gameData, {
+      transportNodes: [],
+      transportRuns: [],
+    });
+    expect(result.nodes.Generator).toMatchObject({
+      type: 'transformer',
+      kind: 'generator',
+      expectedPowerGeneration: 30,
+      actualPowerGeneration: 30,
+    });
   });
 
   it('does not report a demand-limited transformer as input-starved', () => {

@@ -60,7 +60,7 @@ export const LineList = ({ lines, findings, selectedLineId, onSelect }: LineList
       <Box className="planner-empty">
         <Typography>No connected supply lines yet.</Typography>
         <Typography className="planner-muted">
-          Single unconnected buildings are hidden, or the save has no connected production
+          Single unconnected non-generator buildings are hidden, or the save has no connected production
           buildings.
         </Typography>
       </Box>
@@ -113,7 +113,7 @@ export const LineList = ({ lines, findings, selectedLineId, onSelect }: LineList
               </Box>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center', mt: 0.5, color: colors.textSecondary, fontSize: '0.82rem' }}>
                 <Typography component="span" variant="caption">
-                  {formatNumber(line.buildingIds.length)} buildings
+                  {formatNumber(line.buildingIds.length)} building{line.buildingIds.length === 1 ? '' : 's'}
                 </Typography>
                 {outputItems.slice(0, 3).map((itemId) => (
                   <Chip

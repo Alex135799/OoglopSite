@@ -36,11 +36,15 @@ import {
   controlSideKey,
   layoutSupplyGraph,
   optimizeControlSides,
+  portFraction,
   respaceColumns,
   type ControlSideRequest,
   type GraphEdge,
+  type MachineAttachment,
 } from './lineGraphLayout';
 import { routeEdges } from './edgeRouting';
+import { assignGroupRows, buildProductionGroups, type ProductionGroup } from './productionLayout';
+import { detectCrossingPairs, type CrossingSegment } from './tierCrossings';
 import { plannerColors, usePlannerColors, type PlannerModeColors } from '../theme';
 
 interface BuildingNodeData {
@@ -55,8 +59,9 @@ interface BuildingNodeData {
 }
 
 interface TransportNodeData {
-  label: 'S' | 'M' | 'T';
-  kind: 'splitter' | 'merger' | 'storage';
+  label: 'S' | 'M' | 'T' | 'J';
+  kind: 'splitter' | 'merger' | 'storage' | 'junction' | 'tank';
+  severity?: Severity;
   bottleneck?: boolean;
   [key: string]: unknown;
 }
@@ -179,6 +184,8 @@ const BuildingNode = ({ data, selected }: NodeProps) => {
 const TransportNodeShape = ({ data, selected }: NodeProps) => {
   const transport = data as unknown as TransportNodeData;
   const modeColors = usePlannerColors();
+  const severity = transport.severity ?? (transport.bottleneck ? 'warning' : undefined);
+  const colors = nodeSeverity(severity, modeColors);
   return (
     <Box
       aria-label={`${
@@ -186,7 +193,11 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
           ? 'Merger'
           : transport.kind === 'storage'
             ? 'Storage'
-            : 'Splitter'
+            : transport.kind === 'junction'
+              ? 'Pipeline Junction'
+              : transport.kind === 'tank'
+                ? 'Fluid Storage'
+                : 'Splitter'
       }${transport.bottleneck ? ' (bottleneck)' : ''}`}
       sx={{
         position: 'relative',
@@ -205,15 +216,13 @@ const TransportNodeShape = ({ data, selected }: NodeProps) => {
           inset: 0,
           transform: 'rotate(45deg)',
           border: '2px solid',
-          borderColor: transport.bottleneck
-            ? plannerColors.warning.color
-            : plannerColors.secondary.color,
+          borderColor: colors.border,
           borderRadius: '4px',
-          bgcolor: modeColors.surface,
+          bgcolor: colors.background,
           boxShadow: selected
             ? `0 0 0 3px ${plannerColors.primary.color}`
-            : transport.bottleneck
-              ? `0 0 0 2px ${plannerColors.warning.color}`
+            : severity
+              ? `0 0 0 2px ${colors.border}`
               : `0 1px 3px ${modeColors.shadowStrong}`,
         }}
       />
@@ -351,6 +360,715 @@ const MAX_NODES = 150;
 const CHAIN_HORIZONTAL_GAP = 160;
 const CHAIN_GAP = NODE_HEIGHT + STACK_GAP;
 
+const alignStorageToConsumers = (
+  nodes: Node[],
+  line: SupplyLineModel,
+  edges: GraphEdge[],
+  heights: Map<string, number>,
+): Node[] => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, GraphEdge[]>();
+  for (const edge of edges) {
+    const list = outgoing.get(edge.from) ?? [];
+    list.push(edge);
+    outgoing.set(edge.from, list);
+  }
+  const sizeOf = (id: string) => {
+    const node = line.nodes[id];
+    return {
+      width: node?.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH,
+      height: heights.get(id) ?? (node?.type === 'control' ? SPLITTER_SIZE : NODE_HEIGHT),
+    };
+  };
+  const targetPointY = (id: string, itemId: string) => {
+    const node = line.nodes[id];
+    const position = byId.get(id);
+    if (!node || !position) return undefined;
+    const size = sizeOf(id);
+    if (node.type === 'transformer') {
+      return position.position.y + size.height * portFraction(node.inputs, itemId);
+    }
+    if (node.type === 'control') {
+      return position.position.y + size.height / 2;
+    }
+    return position.position.y + size.height / 2;
+  };
+  for (const storage of Object.values(line.nodes)) {
+    if (
+      storage.type !== 'control' ||
+      (storage.kind !== 'storage' && storage.kind !== 'tank')
+    ) {
+      continue;
+    }
+    const storageNode = byId.get(storage.id);
+    if (!storageNode) continue;
+    const consumerEdges = outgoing.get(storage.id) ?? [];
+    const consumers = [...new Set(consumerEdges.map((edge) => edge.to))]
+      .map((id) => byId.get(id))
+      .filter((node): node is Node => Boolean(node));
+    if (consumers.length === 0) continue;
+    const connectionYs = consumerEdges
+      .map((edge) => targetPointY(edge.to, edge.itemId))
+      .filter((value): value is number => value !== undefined);
+    if (connectionYs.length === 0) continue;
+    const storageSize = sizeOf(storage.id);
+    const targetLeft = Math.min(
+      ...consumers.map((consumer) => consumer.position.x),
+    );
+    const targetCenterY =
+      connectionYs.reduce((sum, value) => sum + value, 0) / connectionYs.length;
+    storageNode.position = {
+      x: targetLeft - 60 - storageSize.width,
+      y: targetCenterY - storageSize.height / 2,
+    };
+  }
+  return nodes;
+};
+
+const applyProductionGrid = (
+  nodes: Node[],
+  line: SupplyLineModel,
+  edges: GraphEdge[],
+  attachments: MachineAttachment[],
+  heights: Map<string, number>,
+): Node[] => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const groups = buildProductionGroups(line, edges);
+  if (groups.length === 0) return nodes;
+  const rows = assignGroupRows(groups);
+  const groupByBuilding = new Map<string, ProductionGroup>();
+  for (const group of groups) {
+    for (const id of group.buildingIds) groupByBuilding.set(id, group);
+  }
+  const attachedControlByGroup = new Map<string, string[]>();
+  for (const attachment of attachments) {
+    const group = groupByBuilding.get(attachment.machineId);
+    if (!group) continue;
+    const list = attachedControlByGroup.get(group.id) ?? [];
+    list.push(attachment.controlId);
+    attachedControlByGroup.set(group.id, list);
+  }
+  const attachedControls = new Set(
+    attachments.map((attachment) => attachment.controlId),
+  );
+
+  interface Cell {
+    id: string;
+    kind: 'group' | 'control';
+    tier: number;
+    row: number;
+    nodeIds: string[];
+    width: number;
+    height: number;
+    left: number;
+    top: number;
+    columnKey: string;
+  }
+
+  const boundsFor = (ids: string[]) => {
+    const placed = ids.map((id) => byId.get(id)).filter((node): node is Node => Boolean(node));
+    if (placed.length === 0) return undefined;
+    const left = Math.min(...placed.map((node) => node.position.x));
+    const top = Math.min(...placed.map((node) => node.position.y));
+    const right = Math.max(
+      ...placed.map((node) =>
+        node.position.x +
+        (line.nodes[node.id]?.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH),
+      ),
+    );
+    const bottom = Math.max(
+      ...placed.map((node) => node.position.y + (heights.get(node.id) ?? NODE_HEIGHT)),
+    );
+    return { left, top, width: right - left, height: bottom - top };
+  };
+
+  for (const group of groups) {
+    const sourceIds = group.buildingIds.filter(
+      (id) => line.nodes[id]?.type === 'source' && byId.has(id),
+    );
+    if (sourceIds.length < 2) continue;
+    const first = byId.get(sourceIds[0])!;
+    const minY = Math.min(...sourceIds.map((id) => byId.get(id)!.position.y));
+    const x = Math.min(...sourceIds.map((id) => byId.get(id)!.position.x));
+    let nextY = minY;
+    for (const id of sourceIds.sort()) {
+      const node = byId.get(id)!;
+      node.position = { x, y: nextY };
+      nextY += (heights.get(id) ?? NODE_HEIGHT) + STACK_GAP;
+    }
+    void first;
+  }
+
+  const outgoingByNode = new Map<string, GraphEdge[]>();
+  for (const edge of edges) {
+    const list = outgoingByNode.get(edge.from) ?? [];
+    list.push(edge);
+    outgoingByNode.set(edge.from, list);
+  }
+  const consumerGroupsByItem = new Map<string, Set<string>>();
+  for (const group of groups) {
+    for (const buildingId of group.buildingIds) {
+      const building = line.nodes[buildingId];
+      if (building?.type !== 'transformer') continue;
+      for (const port of building.inputs) {
+        const set = consumerGroupsByItem.get(port.itemId) ?? new Set<string>();
+        set.add(group.id);
+        consumerGroupsByItem.set(port.itemId, set);
+      }
+    }
+  }
+  const sinkStorageByGroup = new Map<string, string[]>();
+  const sinkStorageIds = new Set<string>();
+  for (const node of Object.values(line.nodes)) {
+    if (
+      node.type !== 'control' ||
+      (node.kind !== 'storage' && node.kind !== 'tank') ||
+      (outgoingByNode.get(node.id)?.length ?? 0) > 0 ||
+      !node.itemId
+    ) {
+      continue;
+    }
+    const candidateIds = [...(consumerGroupsByItem.get(node.itemId) ?? [])];
+    const candidateGroups = candidateIds
+      .map((id) => groups.find((group) => group.id === id))
+      .filter((group): group is ProductionGroup => Boolean(group))
+      .sort((a, b) => b.tier - a.tier || a.key.localeCompare(b.key));
+    const consumerGroup = candidateGroups[0];
+    if (!consumerGroup) continue;
+    const list = sinkStorageByGroup.get(consumerGroup.id) ?? [];
+    list.push(node.id);
+    sinkStorageByGroup.set(consumerGroup.id, list);
+    sinkStorageIds.add(node.id);
+  }
+
+  for (const [groupId, storageIds] of sinkStorageByGroup) {
+    const group = groups.find((entry) => entry.id === groupId);
+    if (!group) continue;
+    const machineNodes = group.buildingIds
+      .map((id) => byId.get(id))
+      .filter((node): node is Node => Boolean(node));
+    if (machineNodes.length === 0) continue;
+    const x = Math.min(...machineNodes.map((node) => node.position.x));
+    let nextY =
+      Math.max(
+        ...machineNodes.map(
+          (node) =>
+            node.position.y + (heights.get(node.id) ?? NODE_HEIGHT),
+        ),
+      ) + STACK_GAP;
+    for (const id of storageIds.sort()) {
+      const node = byId.get(id);
+      if (!node) continue;
+      const height = heights.get(id) ?? SPLITTER_SIZE;
+      node.position = { x, y: nextY };
+      nextY += height + STACK_GAP;
+    }
+  }
+
+  const storageGroupById = new Map<string, string>();
+  for (const [groupId, storageIds] of sinkStorageByGroup) {
+    for (const storageId of storageIds) storageGroupById.set(storageId, groupId);
+  }
+  const storageAttachmentByGroup = new Map<string, Set<string>>();
+  const storageAttachedControls = new Set<string>();
+  const storageAttachmentTargets = new Map<string, { targetId: string; side: 'left' | 'right' }[]>();
+  const isAttachableControl = (id: string) => {
+    const node = line.nodes[id];
+    return (
+      node?.type === 'control' &&
+      (node.kind === 'splitter' || node.kind === 'merger' || node.kind === 'junction')
+    );
+  };
+  const addStorageAttachment = (
+    controlId: string,
+    targetId: string,
+    side: 'left' | 'right',
+  ) => {
+    const groupId = storageGroupById.get(targetId);
+    if (!groupId) return;
+    const list = storageAttachmentTargets.get(controlId) ?? [];
+    list.push({ targetId, side });
+    storageAttachmentTargets.set(controlId, list);
+    storageAttachedControls.add(controlId);
+    const attached = storageAttachmentByGroup.get(groupId) ?? new Set<string>();
+    attached.add(controlId);
+    storageAttachmentByGroup.set(groupId, attached);
+  };
+  for (const edge of edges) {
+    const from = line.nodes[edge.from];
+    const to = line.nodes[edge.to];
+    if (isAttachableControl(edge.from) && to?.type === 'control' && (to.kind === 'storage' || to.kind === 'tank')) {
+      addStorageAttachment(edge.from, edge.to, 'left');
+    } else if (isAttachableControl(edge.to) && from?.type === 'control' && (from.kind === 'storage' || from.kind === 'tank')) {
+      addStorageAttachment(edge.to, edge.from, 'right');
+    }
+  }
+  for (const controlId of storageAttachedControls) {
+    const targets = storageAttachmentTargets.get(controlId) ?? [];
+    const targetNodes = targets
+      .map((entry) => byId.get(entry.targetId))
+      .filter((node): node is Node => Boolean(node));
+    if (targetNodes.length === 0) continue;
+    const side = targets[0]?.side ?? 'left';
+    const centerY =
+      targetNodes.reduce((sum, target) => {
+        return sum + target.position.y + (heights.get(target.id) ?? SPLITTER_SIZE) / 2;
+      }, 0) / targetNodes.length;
+    const controlNode = byId.get(controlId);
+    if (!controlNode) continue;
+    const controlHeight = heights.get(controlId) ?? SPLITTER_SIZE;
+    if (side === 'left') {
+      controlNode.position = {
+        x: Math.min(...targetNodes.map((target) => target.position.x)) - 60 - SPLITTER_SIZE,
+        y: centerY - controlHeight / 2,
+      };
+    } else {
+      controlNode.position = {
+        x: Math.max(...targetNodes.map((target) => target.position.x + SPLITTER_SIZE)) + 60,
+        y: centerY - controlHeight / 2,
+      };
+    }
+  }
+
+  const cells: Cell[] = groups.flatMap((group) => {
+    const nodeIds = [
+      ...group.buildingIds,
+      ...(attachedControlByGroup.get(group.id) ?? []),
+      ...(sinkStorageByGroup.get(group.id) ?? []),
+      ...(storageAttachmentByGroup.get(group.id) ?? []),
+    ].filter((id) => byId.has(id));
+    if (nodeIds.length === 0) return [];
+    const bounds = boundsFor(nodeIds);
+    if (!bounds) return [];
+    return [{
+      id: group.id,
+      kind: 'group' as const,
+      tier: group.tier,
+      row: rows.get(group.id) ?? group.tier,
+      nodeIds,
+      width: bounds.width,
+      height: bounds.height,
+      left: bounds.left,
+      top: bounds.top,
+      columnKey: `tier:${group.tier}`,
+    }];
+  });
+
+  const controlIds = Object.values(line.nodes)
+    .filter(
+      (node) =>
+        node.type === 'control' &&
+        byId.has(node.id) &&
+        !attachedControls.has(node.id) &&
+        !sinkStorageIds.has(node.id) &&
+        !storageAttachedControls.has(node.id),
+    )
+    .map((node) => node.id);
+  const incomingEdges = new Map<string, GraphEdge[]>();
+  for (const edge of edges) {
+    const list = incomingEdges.get(edge.to) ?? [];
+    list.push(edge);
+    incomingEdges.set(edge.to, list);
+  }
+  const upstreamGroupsCache = new Map<string, Set<string>>();
+  const upstreamGroupsOfControl = (
+    id: string,
+    visiting = new Set<string>(),
+  ): Set<string> => {
+    const cached = upstreamGroupsCache.get(id);
+    if (cached) return cached;
+    if (visiting.has(id)) return new Set();
+    const nextVisiting = new Set(visiting).add(id);
+    const result = new Set<string>();
+    for (const edge of incomingEdges.get(id) ?? []) {
+      const group = groupByBuilding.get(edge.from);
+      if (group) result.add(group.id);
+      else if (line.nodes[edge.from]?.type === 'control') {
+        for (const groupId of upstreamGroupsOfControl(edge.from, nextVisiting)) {
+          result.add(groupId);
+        }
+      }
+    }
+    upstreamGroupsCache.set(id, result);
+    return result;
+  };
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const outgoingEdges = new Map<string, GraphEdge[]>();
+  for (const edge of edges) {
+    const list = outgoingEdges.get(edge.from) ?? [];
+    list.push(edge);
+    outgoingEdges.set(edge.from, list);
+  }
+  const downstreamGroupsCache = new Map<string, Set<string>>();
+  const downstreamGroupsOfControl = (
+    id: string,
+    visiting = new Set<string>(),
+  ): Set<string> => {
+    const cached = downstreamGroupsCache.get(id);
+    if (cached) return cached;
+    if (visiting.has(id)) return new Set();
+    const nextVisiting = new Set(visiting).add(id);
+    const result = new Set<string>();
+    for (const edge of outgoingEdges.get(id) ?? []) {
+      const group = groupByBuilding.get(edge.to);
+      if (group) result.add(group.id);
+      else if (line.nodes[edge.to]?.type === 'control') {
+        for (const groupId of downstreamGroupsOfControl(edge.to, nextVisiting)) {
+          result.add(groupId);
+        }
+      }
+    }
+    downstreamGroupsCache.set(id, result);
+    return result;
+  };
+  const itemConsumerGroups = new Map<string, Set<string>>();
+  for (const group of groups) {
+    for (const buildingId of group.buildingIds) {
+      const building = line.nodes[buildingId];
+      if (building?.type !== 'transformer') continue;
+      for (const port of building.inputs) {
+        const set = itemConsumerGroups.get(port.itemId) ?? new Set<string>();
+        set.add(group.id);
+        itemConsumerGroups.set(port.itemId, set);
+      }
+    }
+  }
+  const controlLevels = new Map<string, { key: string; boundary: number; sublevel: number }>();
+  const levelOfControl = (id: string, visiting = new Set<string>()): { key: string; boundary: number; sublevel: number } => {
+    const cached = controlLevels.get(id);
+    if (cached) return cached;
+    if (visiting.has(id)) {
+      const fallback = { key: '0:0', boundary: 0, sublevel: 0 };
+      controlLevels.set(id, fallback);
+      return fallback;
+    }
+    const nextVisiting = new Set(visiting).add(id);
+    const controlNode = line.nodes[id];
+    if (
+      controlNode?.type === 'control' &&
+      (controlNode.kind === 'storage' || controlNode.kind === 'tank') &&
+      downstreamGroupsOfControl(id).size === 0
+    ) {
+      const consumers = controlNode.itemId
+        ? [...(itemConsumerGroups.get(controlNode.itemId) ?? [])]
+        : [];
+      const consumerTiers = consumers
+        .map((groupId) => groupById.get(groupId)?.tier)
+        .filter((tier): tier is number => tier !== undefined);
+      if (consumerTiers.length > 0) {
+        const boundary = Math.max(...consumerTiers);
+        const level = { key: `${boundary}:0`, boundary, sublevel: 0 };
+        controlLevels.set(id, level);
+        return level;
+      }
+    }
+    const directInputTiers = (incomingEdges.get(id) ?? [])
+      .map((edge) => groupByBuilding.get(edge.from)?.tier)
+      .filter((tier): tier is number => tier !== undefined);
+    const directOutputTiers = (outgoingEdges.get(id) ?? [])
+      .map((edge) => groupByBuilding.get(edge.to)?.tier)
+      .filter((tier): tier is number => tier !== undefined);
+    let boundary: number;
+    let sublevel: number;
+    if (directInputTiers.length > 0) {
+      boundary = Math.max(...directInputTiers);
+      sublevel = 0;
+    } else if (directOutputTiers.length > 0) {
+      boundary = Math.max(0, Math.min(...directOutputTiers) - 1);
+      sublevel = 1;
+    } else {
+      const upstreamLevels = (incomingEdges.get(id) ?? [])
+        .filter((edge) => line.nodes[edge.from]?.type === 'control')
+        .map((edge) => levelOfControl(edge.from, nextVisiting));
+      if (upstreamLevels.length > 0) {
+        boundary = Math.max(...upstreamLevels.map((level) => level.boundary));
+        sublevel = Math.max(...upstreamLevels.map((level) => level.sublevel)) + 1;
+      } else {
+        boundary = 0;
+        sublevel = 0;
+      }
+    }
+    const level = { key: `${boundary}:${sublevel}`, boundary, sublevel };
+    controlLevels.set(id, level);
+    return level;
+  };
+  for (const id of controlIds) levelOfControl(id);
+
+  const controlAdjacency = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (!controlIds.includes(edge.from) || !controlIds.includes(edge.to)) continue;
+    if (controlLevels.get(edge.from)?.key !== controlLevels.get(edge.to)?.key) continue;
+    const forward = controlAdjacency.get(edge.from) ?? new Set<string>();
+    forward.add(edge.to);
+    controlAdjacency.set(edge.from, forward);
+    const reverse = controlAdjacency.get(edge.to) ?? new Set<string>();
+    reverse.add(edge.from);
+    controlAdjacency.set(edge.to, reverse);
+  }
+  const controlClusters: string[][] = [];
+  const seenControls = new Set<string>();
+  for (const id of controlIds) {
+    if (seenControls.has(id)) continue;
+    const queue = [id];
+    const cluster: string[] = [];
+    seenControls.add(id);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      cluster.push(current);
+      for (const next of controlAdjacency.get(current) ?? []) {
+        if (seenControls.has(next)) continue;
+        seenControls.add(next);
+        queue.push(next);
+      }
+    }
+    controlClusters.push(cluster);
+  }
+  const controlCells: Cell[] = [];
+  const usedControlRows = new Map<string, Set<number>>();
+  for (const cluster of controlClusters) {
+    const connectedGroups = new Set<string>();
+    const level = controlLevels.get(cluster[0]) ?? { key: '0:0', boundary: 0, sublevel: 0 };
+    for (const id of cluster) {
+      const control = line.nodes[id];
+      const isSinkStorage =
+        control?.type === 'control' &&
+        (control.kind === 'storage' || control.kind === 'tank') &&
+        downstreamGroupsOfControl(id).size === 0;
+      if (isSinkStorage && control.itemId) {
+        for (const groupId of itemConsumerGroups.get(control.itemId) ?? []) {
+          connectedGroups.add(groupId);
+        }
+        continue;
+      }
+      for (const groupId of upstreamGroupsOfControl(id)) connectedGroups.add(groupId);
+      for (const groupId of downstreamGroupsOfControl(id)) connectedGroups.add(groupId);
+    }
+    const groupRows = [...connectedGroups]
+      .map((id) => rows.get(id))
+      .filter((value): value is number => value !== undefined);
+    const desiredRow =
+      groupRows.length > 0
+        ? groupRows.reduce((sum, value) => sum + value, 0) / groupRows.length
+        : cells.length;
+    const used = usedControlRows.get(level.key) ?? new Set<number>();
+    usedControlRows.set(level.key, used);
+    let row = Math.max(0, Math.round(desiredRow));
+    let offset = 0;
+    while (used.has(row)) {
+      offset += 1;
+      row = Math.max(0, Math.round(desiredRow) + offset);
+    }
+    used.add(row);
+    const bounds = boundsFor(cluster);
+    if (!bounds) continue;
+    controlCells.push({
+      id: `control:${cluster[0]}`,
+      kind: 'control',
+      tier: level.boundary,
+      row,
+      nodeIds: cluster,
+      width: bounds.width,
+      height: bounds.height,
+      left: bounds.left,
+      top: bounds.top,
+      columnKey: `control:${level.key}`,
+    });
+  }
+
+  const allCells = [...cells, ...controlCells];
+  const tierWidths = new Map<number, number>();
+  const controlWidths = new Map<string, number>();
+  const levelsByBoundary = new Map<number, Array<{ key: string; boundary: number; sublevel: number }>>();
+  for (const cell of cells) {
+    tierWidths.set(cell.tier, Math.max(tierWidths.get(cell.tier) ?? 0, cell.width));
+  }
+  for (const level of controlLevels.values()) {
+    const list = levelsByBoundary.get(level.boundary) ?? [];
+    if (!list.some((entry) => entry.key === level.key)) list.push(level);
+    levelsByBoundary.set(level.boundary, list);
+  }
+  for (const level of controlLevels.values()) {
+    const width = Math.max(
+      ...controlCells
+        .filter((cell) => cell.columnKey === `control:${level.key}`)
+        .map((cell) => cell.width),
+      0,
+    );
+    controlWidths.set(level.key, Math.max(controlWidths.get(level.key) ?? 0, width));
+  }
+  const maxTier = Math.max(
+    ...[...tierWidths.keys(), ...levelsByBoundary.keys(), 0],
+  );
+  const columnX = new Map<string, number>();
+  let x = Math.min(...allCells.map((cell) => cell.left));
+  for (let tier = 0; tier <= maxTier; tier += 1) {
+    columnX.set(`tier:${tier}`, x);
+    x += (tierWidths.get(tier) ?? 0) + 100;
+    const levels = (levelsByBoundary.get(tier) ?? []).sort(
+      (a, b) => a.sublevel - b.sublevel,
+    );
+    for (const level of levels) {
+      columnX.set(`control:${level.key}`, x);
+      x += (controlWidths.get(level.key) ?? 0) + 100;
+    }
+  }
+  const initialPositions = new Map(
+    nodes.map((node) => [node.id, { ...node.position }]),
+  );
+  const rowOfNode = new Map<string, number>();
+  for (const cell of allCells) {
+    for (const id of cell.nodeIds) rowOfNode.set(id, cell.row);
+  }
+
+  const relayout = (gapExtra = new Map<number, number>()) => {
+    const rowHeight = new Map<number, number>();
+    for (const cell of allCells) {
+      rowHeight.set(cell.row, Math.max(rowHeight.get(cell.row) ?? 0, cell.height));
+    }
+    const sortedRows = [...rowHeight.keys()].sort((a, b) => a - b);
+    const rowTop = new Map<number, number>();
+    let y = Math.min(...allCells.map((cell) => cell.top));
+    for (const row of sortedRows) {
+      y += gapExtra.get(row) ?? 0;
+      rowTop.set(row, y);
+      y += (rowHeight.get(row) ?? 0) + 60;
+    }
+    for (const node of nodes) {
+      const initial = initialPositions.get(node.id);
+      if (initial) node.position = { ...initial };
+    }
+    for (const cell of allCells) {
+      const targetX = columnX.get(cell.columnKey);
+      const targetRow = rowTop.get(cell.row);
+      if (targetX === undefined || targetRow === undefined) continue;
+      const targetY =
+        targetRow +
+        ((rowHeight.get(cell.row) ?? cell.height) - cell.height) / 2;
+      const dx = targetX - cell.left;
+      const dy = targetY - cell.top;
+      for (const id of cell.nodeIds) {
+        const node = byId.get(id);
+        if (!node) continue;
+        node.position = {
+          x: node.position.x + dx,
+          y: node.position.y + dy,
+        };
+      }
+    }
+  };
+
+  const portFractionFor = (
+    ports: Array<{ itemId: string }> | undefined,
+    itemId: string,
+  ) => {
+    const items = [...new Set((ports ?? []).map((port) => port.itemId))];
+    const index = items.indexOf(itemId);
+    return index < 0 ? 0.5 : (index + 1) / (items.length + 1);
+  };
+  const crossingSegments = (): CrossingSegment[] =>
+    edges.flatMap((edge) => {
+      const from = line.nodes[edge.from];
+      const to = line.nodes[edge.to];
+      const fromNode = byId.get(edge.from);
+      const toNode = byId.get(edge.to);
+      if (!from || !to || !fromNode || !toNode) return [];
+      const fromSize = {
+        width: from.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH,
+        height: heights.get(edge.from) ?? (from.type === 'control' ? SPLITTER_SIZE : NODE_HEIGHT),
+      };
+      const toSize = {
+        width: to.type === 'control' ? SPLITTER_SIZE : NODE_WIDTH,
+        height: heights.get(edge.to) ?? (to.type === 'control' ? SPLITTER_SIZE : NODE_HEIGHT),
+      };
+      const a =
+        from.type === 'control'
+          ? {
+              x: fromNode.position.x + fromSize.width / 2,
+              y: fromNode.position.y + fromSize.height / 2,
+            }
+          : {
+              x: fromNode.position.x + fromSize.width,
+              y:
+                fromNode.position.y +
+                fromSize.height *
+                  portFractionFor(
+                    from.type === 'source' || from.type === 'transformer'
+                      ? from.outputs
+                      : undefined,
+                    edge.itemId,
+                  ),
+            };
+      const b =
+        to.type === 'control'
+          ? {
+              x: toNode.position.x + toSize.width / 2,
+              y: toNode.position.y + toSize.height / 2,
+            }
+          : {
+              x: toNode.position.x,
+              y:
+                toNode.position.y +
+                toSize.height *
+                  portFractionFor(
+                    to.type === 'transformer' ? to.inputs : undefined,
+                    edge.itemId,
+                  ),
+            };
+      return [{ id: edge.id, a, b }];
+    });
+
+  const countCrossings = () => detectCrossingPairs(crossingSegments()).length;
+  relayout();
+  let bestCrossings = countCrossings();
+
+  const groupCellsByTier = new Map<number, Cell[]>();
+  for (const cell of cells) {
+    const list = groupCellsByTier.get(cell.tier) ?? [];
+    list.push(cell);
+    groupCellsByTier.set(cell.tier, list);
+  }
+  for (const tierCells of groupCellsByTier.values()) {
+    tierCells.sort((a, b) => a.row - b.row);
+    for (let index = 0; index + 1 < tierCells.length; index += 1) {
+      const first = tierCells[index];
+      const second = tierCells[index + 1];
+      const rowA = first.row;
+      const rowB = second.row;
+      first.row = rowB;
+      second.row = rowA;
+      relayout();
+      const crossings = countCrossings();
+      if (crossings < bestCrossings) {
+        bestCrossings = crossings;
+      } else {
+        first.row = rowA;
+        second.row = rowB;
+      }
+    }
+  }
+  relayout();
+  rowOfNode.clear();
+  for (const cell of allCells) {
+    for (const id of cell.nodeIds) rowOfNode.set(id, cell.row);
+  }
+
+  const gapExtra = new Map<number, number>();
+  for (const crossing of detectCrossingPairs(crossingSegments())) {
+    const edgeA = edges.find((edge) => edge.id === crossing.a);
+    const edgeB = edges.find((edge) => edge.id === crossing.b);
+    if (!edgeA || !edgeB) continue;
+    for (const row of new Set([
+      rowOfNode.get(edgeA.to),
+      rowOfNode.get(edgeB.to),
+    ])) {
+      if (row === undefined) continue;
+      gapExtra.set(row, Math.min(160, (gapExtra.get(row) ?? 0) + 32));
+    }
+  }
+  relayout(gapExtra);
+  return nodes;
+};
+
 const layoutTransportChains = (
   nodes: Node[],
   transportNodes: SplitterNode[],
@@ -397,9 +1115,9 @@ const layoutTransportChains = (
     const chain: SplitterNode[] = [];
     let current: SplitterNode | undefined = start;
     while (current && !visited.has(current.id)) {
-      if (taps(current).length > 1) break;
       if (continuationOut(current).length > 1) break;
       if (continuationIn(current).length > 1) break;
+      if (taps(current).length > 1 && continuationOut(current).length > 0) break;
       chain.push(current);
       visited.add(current.id);
       const nextId: string | undefined = continuationOut(current)[0];
@@ -407,6 +1125,7 @@ const layoutTransportChains = (
     }
     if (chain.length === 0) continue;
     const isMerger = chain[0].kind === 'merger';
+    const isJunctionChain = chain[0].kind === 'junction';
 
     const tapNodes = chain.flatMap((transport) =>
       taps(transport)
@@ -444,9 +1163,11 @@ const layoutTransportChains = (
             ) / roleNodes.length
           : undefined;
       const centerY =
-        roleCenterY ??
-        (previousCenterY !== undefined ? previousCenterY + CHAIN_GAP : undefined) ??
-        node.position.y + SPLITTER_SIZE / 2;
+        isJunctionChain && previousCenterY !== undefined
+          ? previousCenterY + CHAIN_GAP
+          : roleCenterY ??
+            (previousCenterY !== undefined ? previousCenterY + CHAIN_GAP : undefined) ??
+            node.position.y + SPLITTER_SIZE / 2;
 
       node.position = { x: chainX, y: centerY - SPLITTER_SIZE / 2 };
 
@@ -537,8 +1258,9 @@ export const LineGraph = ({
           selected: id === selectedBuildingId,
           style: { width: SPLITTER_SIZE, height },
           data: {
-            label: node.kind === 'merger' ? 'M' : node.kind === 'storage' ? 'T' : 'S',
+            label: node.kind === 'merger' ? 'M' : node.kind === 'storage' || node.kind === 'tank' ? 'T' : node.kind === 'junction' ? 'J' : 'S',
             kind: node.kind,
+            severity: severityOf(id, findings),
             ...(node.kind === 'splitter' && node.bottleneck ? { bottleneck: true } : {}),
           } satisfies TransportNodeData,
         });
@@ -555,6 +1277,14 @@ export const LineGraph = ({
       outList.push(edge);
       outgoing.set(edge.from, outList);
     }
+    const isChainControl = (id: string): boolean => {
+      const node = line.nodes[id];
+      return (
+        node?.type === 'control' &&
+        node.kind !== 'storage' &&
+        node.kind !== 'tank'
+      );
+    };
     const controlNodes: SplitterNode[] = [];
     for (const id of layout.visibleIds) {
       const node = line.nodes[id];
@@ -572,11 +1302,11 @@ export const LineGraph = ({
         directOutputs: outputs,
         inputRoles: inputs.map((input) => ({
           id: input,
-          role: line.nodes[input]?.type === 'control' ? 'continuation' : 'sink',
+          role: isChainControl(input) ? 'continuation' : 'sink',
         })),
         outputRoles: outputs.map((output) => ({
           id: output,
-          role: line.nodes[output]?.type === 'control' ? 'continuation' : 'tap',
+          role: isChainControl(output) ? 'continuation' : 'tap',
         })),
       });
     }
@@ -650,7 +1380,18 @@ export const LineGraph = ({
       }
     }
 
-    const positioned = layoutTransportChains(graphNodes, controlNodes);
+    const positioned = alignStorageToConsumers(
+      applyProductionGrid(
+        layoutTransportChains(graphNodes, controlNodes),
+        line,
+        visibleEdges,
+        layout.attachments,
+        layout.heights,
+      ),
+      line,
+      visibleEdges,
+      layout.heights,
+    );
     const finalPositions = new Map(positioned.map((node) => [node.id, node.position]));
     const controlSides = buildControlSides(finalPositions);
     const edgeRoutes = routeEdges(

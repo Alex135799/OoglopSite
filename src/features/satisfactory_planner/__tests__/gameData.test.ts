@@ -36,13 +36,37 @@ describe('game data', () => {
     }
     for (const generator of Object.values(gameData.generators)) {
       for (const fuel of generator.fuels) {
-        if (fuel.item) expect(gameData.items[fuel.item]).toBeDefined();
-        if (fuel.supplement) expect(gameData.items[fuel.supplement]).toBeDefined();
+        if (fuel.item) {
+          expect(gameData.items[fuel.item]).toBeDefined();
+          expect(fuel.energyMJ).toBeGreaterThan(0);
+        }
+        if (fuel.supplement) {
+          expect(gameData.items[fuel.supplement]).toBeDefined();
+          expect(fuel.supplementRate).toBeGreaterThan(0);
+        }
         if (fuel.byproduct) expect(gameData.items[fuel.byproduct]).toBeDefined();
       }
     }
     for (const belt of Object.values(gameData.belts)) expect(belt.rate).toBeGreaterThan(0);
     for (const pipe of Object.values(gameData.pipes)) expect(pipe.rate).toBeGreaterThan(0);
+  });
+
+  it('includes fuel energy and generator burn metadata', () => {
+    expect(gameData.items.Desc_Coal_C.energyMJ).toBe(300);
+    expect(gameData.items.Desc_Coal_C.stackSize).toBe(100);
+    expect(gameData.items.Desc_IronPlate_C.stackSize).toBe(200);
+    expect(gameData.items.Desc_LiquidFuel_C.energyMJ).toBe(750);
+    expect(gameData.generators.Build_GeneratorCoal_C.fuels[0]).toMatchObject({
+      item: 'Desc_Coal_C',
+      energyMJ: 300,
+      supplement: 'Desc_Water_C',
+      supplementRate: 45,
+    });
+    expect(gameData.generators.Build_GeneratorNuclear_C.fuels[0]).toMatchObject({
+      item: 'Desc_NuclearFuelRod_C',
+      byproduct: 'Desc_NuclearWaste_C',
+      byproductAmount: 50,
+    });
   });
 
   it('includes the no-input Excited Photonic Matter recipe and converts fluid amounts', () => {
@@ -80,7 +104,7 @@ describe('game data', () => {
       expect(() => validateGameData(data)).toThrow(message);
     };
 
-    expectFailure((data) => { data.schemaVersion = 2; }, /Unsupported game data schema version/);
+    expectFailure((data) => { data.schemaVersion = 3; }, /Unsupported game data schema version/);
     expectFailure((data) => { (data as unknown as { items: unknown }).items = []; }, /must be an object/);
     expectFailure((data) => { data.items.Desc_IronPlate_C.name = ''; }, /items.Desc_IronPlate_C.name/);
     expectFailure((data) => { data.recipes.Recipe_IronPlate_C.duration = Number.NaN; }, /duration/);

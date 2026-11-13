@@ -144,6 +144,32 @@ describe('BuildingDetails', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('renders storage contents in order', async () => {
+    const storage: SupplyControlNode = {
+      id: 'Storage',
+      type: 'control',
+      kind: 'storage',
+      displayName: 'Storage',
+      inputs: [],
+      outputs: [],
+      expectedThroughput: 0,
+      actualThroughput: 0,
+      buffered: true,
+      contents: [
+        { itemId: 'Desc_IronPlate_C', amount: 200 },
+        { itemId: 'Desc_Coal_C', amount: 3 },
+      ],
+    };
+    render(<BuildingDetails supplyNode={storage} onClose={() => undefined} />);
+    expect(screen.getByRole('heading', { name: 'Contents' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Iron Plate: 200 of 200')).toBeInTheDocument();
+    expect(screen.getByLabelText('Coal: 3 of 100')).toBeInTheDocument();
+    await userEvent.hover(screen.getByLabelText('Coal: 3 of 100'));
+    expect(await screen.findByText('Coal · 3 / 100')).toBeInTheDocument();
+    expect(screen.getByText('200')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
   it('renders control inputs, outputs and bottleneck reduction', async () => {
     const onClose = vi.fn();
     const splitter: SupplyControlNode = {
@@ -194,6 +220,32 @@ describe('BuildingDetails', () => {
     expect(screen.getByText('3 Caterium Ore → 2 Caterium Ingot')).toBeInTheDocument();
     expect(screen.getByText('45 items/min')).toBeInTheDocument();
     expect(screen.getByText('30 items/min')).toBeInTheDocument();
+  });
+
+  it('shows generator fuel and buffer duration', () => {
+    render(
+      <BuildingDetails
+        building={building('Build_Generator', {
+          displayName: 'Coal-Powered Generator',
+          typeId: 'Build_GeneratorCoal_C',
+          inputs: rates({ Desc_Coal_C: 15, Desc_Water_C: 45 }),
+          outputs: [],
+          powerGeneration: 75,
+          selectedFuel: 'Desc_Coal_C',
+          fuelBuffer: {
+            itemId: 'Desc_Coal_C',
+            amount: 100,
+            runtimeMinutes: 6.6667,
+          },
+        })}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText('Fuel')).toBeInTheDocument();
+    expect(screen.getAllByText('Coal').length).toBeGreaterThan(0);
+    expect(screen.getByText('Fuel duration')).toBeInTheDocument();
+    expect(screen.getByText('6.67 min')).toBeInTheDocument();
+    expect(screen.getByText('75 MW')).toBeInTheDocument();
   });
 
   it('marks unmodeled buildings and hides the recipe', () => {

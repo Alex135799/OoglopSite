@@ -103,6 +103,26 @@ describe('control side assignment', () => {
   });
 });
 
+  it('stacks generators of the same type vertically', () => {
+    const buildings = [
+      building('GeneratorA', {
+        typeId: 'Build_GeneratorBiomass_Automated_C',
+        displayName: 'Biomass Burner',
+        powerGeneration: 30,
+      }),
+      building('GeneratorB', {
+        typeId: 'Build_GeneratorBiomass_Automated_C',
+        displayName: 'Biomass Burner',
+        powerGeneration: 30,
+      }),
+    ];
+    const result = layout(buildings, []);
+    const a = result.positions.get('GeneratorA')!;
+    const b = result.positions.get('GeneratorB')!;
+    expect(a.x).toBe(b.x);
+    expect(a.y).not.toBe(b.y);
+  });
+
   it('orders same-recipe machines by the control chain, not by id', () => {
     const buildings = [
       source('A', 'Plate'),

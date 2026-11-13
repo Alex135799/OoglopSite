@@ -17,7 +17,7 @@ const SOURCE_URL =
 const SOURCE_COMMIT = '0429a63144cc3ca46999e054d0b53849a8e94c6b';
 const SOURCE_SHA256 = '01cc810c229ce0a81848edbe1481be233e773e3cc4f8a3b662db2f86e86fb22a';
 const GAME_VERSION = '1.2';
-const DATASET_SCHEMA_VERSION = 1;
+const DATASET_SCHEMA_VERSION = 2;
 const SAVE_VERSION_MAX = 58;
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -83,6 +83,22 @@ const formOf = (value) => {
 const toDisplayAmount = (byName, item, amount) => {
   const form = formOf(byName.get(item)?.mForm);
   return form === 'liquid' || form === 'gas' ? amount / 1000 : amount;
+};
+
+const STACK_SIZES = {
+  SS_ONE: 1,
+  SS_SMALL: 50,
+  SS_MEDIUM: 100,
+  SS_BIG: 200,
+  SS_HUGE: 500,
+};
+
+const energyPerDisplayUnit = (byName, item) => {
+  const cls = byName.get(item);
+  if (!cls) return 0;
+  const energy = toNumber(cls.mEnergyValue);
+  const form = formOf(cls.mForm);
+  return form === 'liquid' || form === 'gas' ? energy * 1000 : energy;
 };
 
 const classIndex = (classes) => new Map(classes.map((entry) => [entry.ClassName, entry]));
@@ -201,13 +217,27 @@ const main = async () => {
   for (const cls of classes) {
     if (!cls.ClassName?.startsWith('Build_Generator')) continue;
     if (cls.mPowerProduction === undefined) continue;
+    const powerProduction = toNumber(cls.mPowerProduction);
+    const supplementRatio = toNumber(cls.mSupplementalToPowerRatio);
+    const requiresSupplement =
+      String(cls.mRequiresSupplementalResource).toLowerCase() === 'true' ||
+      supplementRatio > 0;
     const fuels = Array.isArray(cls.mFuel)
-      ? cls.mFuel.map((fuel) => ({
-          item: itemIdsIn(fuel.mFuelClass).values().next().value,
-          supplement: itemIdsIn(fuel.mSupplementalResourceClass).values().next().value,
-          byproduct: itemIdsIn(fuel.mByproduct).values().next().value,
-          byproductAmount: toNumber(fuel.mByproductAmount),
-        }))
+      ? cls.mFuel.map((fuel) => {
+          const item = itemIdsIn(fuel.mFuelClass).values().next().value;
+          const supplement = itemIdsIn(fuel.mSupplementalResourceClass).values().next().value;
+          return {
+            item,
+            energyMJ: energyPerDisplayUnit(byName, item),
+            supplement,
+            supplementRate:
+              requiresSupplement && supplement
+                ? powerProduction * 0.06 * supplementRatio
+                : undefined,
+            byproduct: itemIdsIn(fuel.mByproduct).values().next().value,
+            byproductAmount: toNumber(fuel.mByproductAmount),
+          };
+        })
       : [];
     for (const fuel of fuels) {
       if (fuel.item) referencedItems.add(fuel.item);
@@ -217,7 +247,7 @@ const main = async () => {
     generators[cls.ClassName] = {
       id: cls.ClassName,
       name: cls.mDisplayName ?? cls.ClassName,
-      powerProduction: toNumber(cls.mPowerProduction),
+      powerProduction,
       fuels,
     };
   }
@@ -250,6 +280,8 @@ const main = async () => {
       id,
       name: cls.mDisplayName ?? id,
       form: formOf(cls.mForm),
+      energyMJ: energyPerDisplayUnit(byName, id),
+      stackSize: STACK_SIZES[cls.mStackSize] ?? 1,
       sinkPoints: toNumber(cls.mResourceSinkPoints),
     };
   }

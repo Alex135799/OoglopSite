@@ -4,6 +4,7 @@ import type {
   NormalizedSave,
   ProductionLine,
   Severity,
+  SupplyControlNode,
   SupplyLineModel,
 } from './types';
 import type { GameData } from '../api/gameData';
@@ -166,6 +167,66 @@ const supplyLineFindings = (
       });
     }
 
+    const surplusTanks = Object.values(line.nodes).filter(
+      (node): node is SupplyControlNode =>
+        node.type === 'control' && node.kind === 'tank' && (node.surplusRate ?? 0) > 0,
+    );
+    for (const node of surplusTanks) {
+      const itemId = node.itemId ?? 'unknown';
+      const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
+      findings.push({
+        id: `line:${line.id}:tank-surplus:${node.id}`,
+        severity: 'warning',
+        kind: 'tank_surplus',
+        message: `${node.displayName} is accumulating surplus: ${number(node.surplusRate ?? 0)} ${unit} more input than output.`,
+        lineId: line.id,
+        ...(node.itemId ? { itemId: node.itemId } : {}),
+        buildingIds: [node.id],
+      });
+    }
+
+    const depletedTanks = Object.values(line.nodes).filter(
+      (node): node is SupplyControlNode =>
+        node.type === 'control' &&
+        node.kind === 'tank' &&
+        node.depletionMinutes !== undefined,
+    );
+    for (const node of depletedTanks) {
+      const itemId = node.itemId ?? 'unknown';
+      const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
+      findings.push({
+        id: `line:${line.id}:tank-depletion:${node.id}`,
+        severity: 'critical',
+        kind: 'tank_depletion',
+        message: `${node.displayName} will deplete in about ${number(node.depletionMinutes ?? 0)} min: output exceeds input by the current net draw (${unit}).`,
+        lineId: line.id,
+        ...(node.itemId ? { itemId: node.itemId } : {}),
+        buildingIds: [node.id],
+      });
+    }
+
+    const limitedSources = Object.values(line.nodes).filter(
+      (node) => node.type === 'source' && node.limitedBy === 'demand',
+    );
+    for (const node of limitedSources) {
+      const expected = node.outputs.reduce((sum, port) => sum + port.expectedRate, 0);
+      const actual = node.outputs.reduce((sum, port) => sum + port.actualRate, 0);
+      const itemId = node.outputs[0]?.itemId ?? 'unknown';
+      const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
+      findings.push({
+        id: `line:${line.id}:source-demand:${node.id}`,
+        severity: 'warning',
+        kind: 'demand_limited',
+        message: `${node.displayName} is demand-limited: ${number(actual)} of ${number(expected)} ${unit} accepted downstream.`,
+        lineId: line.id,
+        ...(itemId !== 'unknown' ? { itemId } : {}),
+        buildingIds: [node.id],
+        required: expected,
+        available: actual,
+        unit,
+      });
+    }
+
     const unknownTransports = Object.values(line.nodes).filter(
       (node) => node.type === 'transport' && node.unknown,
     );
@@ -186,6 +247,7 @@ const supplyLineFindings = (
     );
     for (const entry of limitedControls) {
       const isSplitter = entry.reason.startsWith('Splitter');
+      const isJunction = entry.reason.startsWith('Junction');
       const itemId = entry.itemId ?? 'unknown';
       const unit = itemId === 'unknown' ? 'items/min' : unitFor(data, itemId);
       const label = itemId === 'unknown' ? 'flow' : itemLabel(data, itemId);
@@ -194,10 +256,10 @@ const supplyLineFindings = (
         ? 'downstream demand'
         : 'output belt capacity';
       findings.push({
-        id: `line:${line.id}:${isSplitter ? 'splitter' : 'control'}-bottleneck:${entry.nodeId}`,
+        id: `line:${line.id}:${isSplitter ? 'splitter' : isJunction ? 'junction' : 'control'}-bottleneck:${entry.nodeId}`,
         severity: 'warning',
         kind: isSplitter ? 'splitter_bottleneck' : 'control_bottleneck',
-        message: `${isSplitter ? 'Splitter' : 'Merger'} ${shortId} in ${line.name} is limited by ${reason}: ${label} ${number(entry.actualRate)} of ${number(entry.expectedRate)} ${unit}.`,
+        message: `${isSplitter ? 'Splitter' : isJunction ? 'Junction' : 'Merger'} ${shortId} in ${line.name} is limited by ${reason}: ${label} ${number(entry.actualRate)} of ${number(entry.expectedRate)} ${unit}.`,
         lineId: line.id,
         ...(entry.itemId ? { itemId: entry.itemId } : {}),
         required: entry.expectedRate,
@@ -216,14 +278,24 @@ export const detectBottlenecks = (
 ): Finding[] => {
   const findings: Finding[] = [];
 
-  if (model.power.consumption > model.power.generation) {
+  const suppliedGeneration = (supplyLines ?? []).reduce(
+    (sum, line) => sum + line.summary.power.actualGeneration,
+    0,
+  );
+  const expectedSuppliedGeneration = (supplyLines ?? []).reduce(
+    (sum, line) => sum + line.summary.power.expectedGeneration,
+    0,
+  );
+  const generation =
+    expectedSuppliedGeneration > 0 ? suppliedGeneration : model.power.generation;
+  if (model.power.consumption > generation) {
     findings.push({
       id: 'power:deficit',
       severity: 'critical',
       kind: 'power_deficit',
-      message: `Power deficit: ${number(model.power.consumption)} MW demand, ${number(model.power.generation)} MW modeled generation.`,
+      message: `Power deficit: ${number(model.power.consumption)} MW demand, ${number(generation)} MW actual generation.`,
       required: model.power.consumption,
-      available: model.power.generation,
+      available: generation,
       unit: 'MW',
     });
   } else if (

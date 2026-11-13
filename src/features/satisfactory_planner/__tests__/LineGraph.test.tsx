@@ -170,6 +170,34 @@ describe('LineGraph', () => {
     expect(onSelect).toHaveBeenCalledWith('splitter-1');
   });
 
+  it('renders a pipeline junction as a J control', () => {
+    const junctionLine = line('line-junction', ['A', 'B', 'C'], {
+      name: 'Junction line',
+      outputItems: ['Plate'],
+      flows: [],
+    });
+    const onSelect = vi.fn();
+    render(
+      <LineGraph
+        line={supply(buildings, junctionLine, [
+          {
+            id: 'junction-1',
+            typeId: 'Build_PipelineJunction_Cross_C',
+            kind: 'junction',
+            itemId: 'Plate',
+            inputs: ['A', 'B'],
+            outputs: ['C'],
+          },
+        ])}
+        findings={[]}
+        onSelectBuilding={onSelect}
+      />,
+    );
+    expect(screen.getAllByText('J')).toHaveLength(1);
+    fireEvent.click(screen.getByText('J'));
+    expect(onSelect).toHaveBeenCalledWith('junction-1');
+  });
+
   it('renders an actual merger between its upstream and downstream buildings', () => {
     const mergeLine = line('line-merge', ['A', 'B', 'C'], {
       name: 'Merge line',

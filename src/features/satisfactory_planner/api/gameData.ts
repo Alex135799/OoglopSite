@@ -5,6 +5,8 @@ export interface GameItem {
   id: string;
   name: string;
   form: ItemForm;
+  energyMJ: number;
+  stackSize: number;
   sinkPoints: number;
 }
 
@@ -44,7 +46,9 @@ export interface GameExtractor {
 
 export interface GameGeneratorFuel {
   item?: string;
+  energyMJ: number;
   supplement?: string;
+  supplementRate?: number;
   byproduct?: string;
   byproductAmount: number;
 }
@@ -104,7 +108,7 @@ const requireNumber = (value: unknown, field: string): number => {
 export const validateGameData = (input: unknown): GameData => {
   const data = requireRecord(input, 'root');
   const schemaVersion = requireNumber(data.schemaVersion, 'schemaVersion');
-  if (schemaVersion !== 1) throw new Error(`Unsupported game data schema version ${schemaVersion}`);
+  if (schemaVersion !== 2) throw new Error(`Unsupported game data schema version ${schemaVersion}`);
 
   const items = requireRecord(data.items, 'items') as Record<string, GameItem>;
   const recipes = requireRecord(data.recipes, 'recipes') as Record<string, GameRecipe>;
@@ -118,6 +122,8 @@ export const validateGameData = (input: unknown): GameData => {
     requireString(item?.id, `items.${id}.id`);
     requireString(item?.name, `items.${id}.name`);
     requireString(item?.form, `items.${id}.form`);
+    requireNumber(item?.energyMJ, `items.${id}.energyMJ`);
+    requireNumber(item?.stackSize, `items.${id}.stackSize`);
   }
   for (const [id, recipe] of Object.entries(recipes)) {
     requireString(recipe?.id, `recipes.${id}.id`);
@@ -150,6 +156,15 @@ export const validateGameData = (input: unknown): GameData => {
     requireNumber(generator?.powerProduction, `generators.${id}.powerProduction`);
     if (!Array.isArray(generator?.fuels)) {
       throw new Error(`Game data generator "${id}" must have a fuels array`);
+    }
+    for (const fuel of generator.fuels) {
+      if (fuel.item) requireNumber(fuel.energyMJ, `generators.${id}.fuels.energyMJ`);
+      if (fuel.supplement) {
+        requireString(fuel.supplement, `generators.${id}.fuels.supplement`);
+        if (fuel.supplementRate !== undefined) {
+          requireNumber(fuel.supplementRate, `generators.${id}.fuels.supplementRate`);
+        }
+      }
     }
   }
   for (const [id, belt] of Object.entries(belts)) {

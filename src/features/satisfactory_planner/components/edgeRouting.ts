@@ -14,7 +14,7 @@ import {
 import type { SupplyLineModel, SupplyNode } from '../domain/types';
 
 export const LANE_PITCH = 28;
-export const LANE_END_PADDING = 10;
+export const LANE_END_PADDING = 28;
 
 export interface EdgeRoute {
   edgeId: string;

@@ -76,6 +76,9 @@ const isMachine = (node: SupplyNode | undefined): boolean =>
 
 const stackKeyOf = (node: SupplyNode): string => {
   if (node.type === 'transformer' && node.recipeId) return `recipe:${node.recipeId}`;
+  if (node.type === 'transformer' && node.kind === 'generator') {
+    return `generator:${node.displayName}`;
+  }
   return `machine:${node.id}`;
 };
 
@@ -240,6 +243,7 @@ const buildAttachments = (
 
   for (const node of Object.values(line.nodes)) {
     if (node.type !== 'control' || !visible.has(node.id)) continue;
+    if (node.kind !== 'splitter' && node.kind !== 'merger' && node.kind !== 'junction') continue;
     const leftEdges = edges
       .filter((edge) => edge.from === node.id && isMachine(line.nodes[edge.to]))
       .sort((a, b) => a.to.localeCompare(b.to) || a.itemId.localeCompare(b.itemId));
@@ -851,7 +855,28 @@ export const optimizeControlSides = (
       let bestCrossings = countCrossings(incident, fixedSegments, sides);
       let bestPreference = preference();
       let best: ControlSide[] | undefined;
-      for (const permutation of controlSidePermutations(endpoints.length)) {
+      const allPermutations = controlSidePermutations(endpoints.length);
+      const horizontalTarget = (entry: (typeof endpoints)[number]) => {
+        const otherId = entry.edge.from === controlId ? entry.edge.to : entry.edge.from;
+        const other = line.nodes[otherId];
+        if (other?.type !== 'source' && other?.type !== 'transformer') return false;
+        const request = entry.request!;
+        const dx = request.otherCenter.x - request.controlCenter.x;
+        const dy = request.otherCenter.y - request.controlCenter.y;
+        return Math.abs(dx) >= Math.abs(dy);
+      };
+      const naturalPermutations = allPermutations.filter((permutation) =>
+        endpoints.every(
+          (entry, index) =>
+            !horizontalTarget(entry) ||
+            permutation[index] === 'left' ||
+            permutation[index] === 'right',
+        ),
+      );
+      const candidates = naturalPermutations.length > 0
+        ? naturalPermutations
+        : allPermutations;
+      for (const permutation of candidates) {
         const candidate = new Map(sides);
         endpoints.forEach((entry, index) => candidate.set(entry.key, permutation[index]));
         const crossings = countCrossings(incident, fixedSegments, candidate);

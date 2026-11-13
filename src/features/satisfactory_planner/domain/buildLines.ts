@@ -184,10 +184,17 @@ export const buildLines = (
       .map((entry) => entry.itemId);
     const nameItems = terminalItems.length > 0 ? terminalItems : outputItems;
     const names = nameItems.map(nameForItem);
+    const generator = component.length === 1 && component[0].powerGeneration > 0
+      ? component[0]
+      : undefined;
     const name =
       names.length > 0
         ? `${names.slice(0, 2).join(' + ')}${names.length > 2 ? ' +…' : ''} line`
-        : `${component[0].displayName} (unlinked)`;
+        : generator
+          ? generator.inputs.length > 0
+            ? `${nameForItem(generator.inputs[0].itemId)} Generator line`
+            : `${generator.displayName} line`
+          : `${component[0].displayName} (unlinked)`;
 
     return {
       id: `line-${index + 1}`,

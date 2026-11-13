@@ -12,6 +12,11 @@ export interface RecipeAmount {
   amount: number;
 }
 
+export interface StorageStack {
+  itemId: string;
+  amount: number;
+}
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -31,6 +36,13 @@ export interface Building {
   outputs: ItemRate[];
   recipeInputs?: RecipeAmount[];
   recipeOutputs?: RecipeAmount[];
+  selectedFuel?: string;
+  fuelBuffer?: {
+    itemId: string;
+    amount: number;
+    runtimeMinutes: number;
+  };
+  fuelUnknown?: boolean;
   powerConsumption: number;
   powerGeneration: number;
   modeled: boolean;
@@ -81,6 +93,9 @@ export type FindingKind =
   | 'pipe_over_capacity'
   | 'splitter_bottleneck'
   | 'control_bottleneck'
+  | 'demand_limited'
+  | 'tank_depletion'
+  | 'tank_surplus'
   | 'missing_recipe'
   | 'unmodeled';
 
@@ -105,6 +120,7 @@ export interface TransportRun {
   toNodeId: string;
   itemId?: string;
   capacity?: number;
+  unknown?: boolean;
   segmentCount: number;
   segmentIds: string[];
 }
@@ -112,7 +128,7 @@ export interface TransportRun {
 export interface SplitterNode {
   id: string;
   typeId: string;
-  kind: 'splitter' | 'merger' | 'storage';
+  kind: 'splitter' | 'merger' | 'storage' | 'junction' | 'tank';
   itemId?: string;
   inputs: string[];
   outputs: string[];
@@ -120,6 +136,8 @@ export interface SplitterNode {
   directOutputs?: string[];
   inputRoles?: { id: string; role: 'sink' | 'continuation' }[];
   outputRoles?: { id: string; role: 'tap' | 'continuation' }[];
+  contents?: StorageStack[];
+  storedAmount?: number;
 }
 
 export interface Coverage {
@@ -196,6 +214,7 @@ export interface SupplySourceNode extends SupplyNodeBase {
   shards: number;
   expectedPower: number;
   actualPower: number;
+  limitedBy?: 'demand';
 }
 
 export interface SupplyTransformerNode extends SupplyNodeBase {
@@ -213,11 +232,18 @@ export interface SupplyTransformerNode extends SupplyNodeBase {
   expectedPowerGeneration: number;
   actualPowerGeneration: number;
   limitedBy?: 'input' | 'demand' | 'unknown';
+  selectedFuel?: string;
+  fuelBuffer?: {
+    itemId: string;
+    amount: number;
+    runtimeMinutes: number;
+  };
+  fuelUnknown?: boolean;
 }
 
 export interface SupplyControlNode extends SupplyNodeBase {
   type: 'control';
-  kind: 'splitter' | 'merger' | 'storage';
+  kind: 'splitter' | 'merger' | 'storage' | 'junction' | 'tank';
   itemId?: string;
   inputs: SupplyInputPort[];
   outputs: SupplyOutputPort[];
@@ -226,6 +252,10 @@ export interface SupplyControlNode extends SupplyNodeBase {
   bottleneck?: boolean;
   bottleneckReason?: 'capacity' | 'demand';
   buffered?: boolean;
+  contents?: StorageStack[];
+  storedAmount?: number;
+  depletionMinutes?: number;
+  surplusRate?: number;
 }
 
 export interface SupplyTransportNode extends SupplyNodeBase {

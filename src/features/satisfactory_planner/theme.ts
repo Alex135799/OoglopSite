@@ -85,6 +85,36 @@ export const plannerColors = {
   } satisfies PlannerModeColors,
 } as const;
 
+
+export const storageStackPalette = [
+  { color: '#4f8cff', bright: '#a8c4ff' },
+  { color: '#f2994a', bright: '#ffc38a' },
+  { color: '#27ae60', bright: '#7fe0a5' },
+  { color: '#9b51e0', bright: '#d2a8ff' },
+  { color: '#eb5757', bright: '#ff9d9d' },
+  { color: '#2d9cdb', bright: '#8ed8ff' },
+  { color: '#f2c94c', bright: '#ffe89a' },
+  { color: '#e46ac4', bright: '#ffb3eb' },
+  { color: '#6fcf97', bright: '#b6f2cf' },
+  { color: '#8a94a6', bright: '#c3c7d1' },
+] as const;
+
+const storageItemColorOverrides: Record<string, number> = {
+  Desc_PackagedBiofuel_C: 0,
+  Desc_Coal_C: 1,
+  Desc_IronPlate_C: 2,
+};
+
+export const storageStackColor = (itemId: string) => {
+  const override = storageItemColorOverrides[itemId];
+  if (override !== undefined) return storageStackPalette[override];
+  let hash = 0;
+  for (const character of itemId) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return storageStackPalette[hash % storageStackPalette.length];
+};
+
 export const defaultPlannerMode: PlannerMode = 'dark';
 
 export const usePlannerColors = (): PlannerModeColors => {
